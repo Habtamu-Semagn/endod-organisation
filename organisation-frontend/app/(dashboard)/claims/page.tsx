@@ -1,9 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 export default function ClaimsPage() {
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState("pending");
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [calendar, setCalendar] = useState("Oct 1 - Oct 31, 2024");
+  const [department, setDepartment] = useState("All Departments");
+  const [pharmacy, setPharmacy] = useState("All Pharmacies");
 
   return (
     <div className="flex flex-col w-full pb-space-2xl">
@@ -11,15 +17,6 @@ export default function ClaimsPage() {
       <div className="flex flex-col gap-space-sm pt-space-lg mb-space-lg">
         <div className="flex flex-wrap items-center justify-between gap-space-md">
           <div>
-            <div className="flex items-center gap-space-sm mb-1">
-              <span className="font-label-sm text-label-sm uppercase tracking-wider text-primary font-semibold">
-                Verification Desk &amp; Audit Portal
-              </span>
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary-fixed-dim" />
-              <span className="font-label-sm text-label-sm text-on-surface-variant">
-                Addis Ababa Clinical Net (FY2024/Q1)
-              </span>
-            </div>
             <h1 className="font-headline-lg text-headline-lg text-on-surface font-bold tracking-tight">
               Prescription Claims Management
             </h1>
@@ -29,18 +26,11 @@ export default function ClaimsPage() {
           </div>
           {/* Quick Summary Metric Pills */}
           <div className="flex items-center gap-space-sm bg-surface-container-low p-1.5 rounded-xl">
-            <div className="px-space-md py-1 bg-surface-container-lowest rounded-lg shadow-sm flex items-center gap-2">
+            <div className="px-space-md py-1 bg-surface-container-lowest rounded-lg  flex items-center gap-2">
               <span className="material-symbols-outlined text-secondary text-[18px]">account_balance_wallet</span>
               <div className="flex flex-col">
                 <span className="font-label-sm text-label-sm text-on-surface-variant uppercase">Pending Total</span>
                 <span className="font-numeric-currency text-numeric-currency text-on-surface font-bold">ETB 41,850.00</span>
-              </div>
-            </div>
-            <div className="px-space-md py-1 bg-surface-container-lowest rounded-lg shadow-sm flex items-center gap-2">
-              <span className="material-symbols-outlined text-tertiary text-[18px]">verified_user</span>
-              <div className="flex flex-col">
-                <span className="font-label-sm text-label-sm text-on-surface-variant uppercase">SLA Adherence</span>
-                <span className="font-numeric-currency text-numeric-currency text-tertiary font-bold">98.4%</span>
               </div>
             </div>
           </div>
@@ -48,69 +38,102 @@ export default function ClaimsPage() {
         {/* Filter Tabs with Badges */}
         <div className="flex items-center justify-between mt-space-md border-b-0 overflow-x-auto pb-1">
           <div className="flex items-center gap-space-xs bg-surface-container-low p-1 rounded-xl">
-            <button className="px-space-md py-2 rounded-lg font-label-md text-label-md text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors flex items-center gap-2">
-              <span>All</span>
-              <span className="px-2 py-0.5 rounded-full bg-surface-container-highest text-on-surface-variant font-label-sm text-label-sm">148</span>
-            </button>
-            <button className="px-space-md py-2 rounded-lg font-label-md text-label-md bg-surface-container-lowest text-on-surface font-semibold shadow-sm flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-              <span>Pending Approval</span>
-              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-label-sm text-label-sm font-semibold">19</span>
-            </button>
-            <button className="px-space-md py-2 rounded-lg font-label-md text-label-md text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors flex items-center gap-2">
-              <span>Approved</span>
-              <span className="px-2 py-0.5 rounded-full bg-surface-container-highest text-on-surface-variant font-label-sm text-label-sm">94</span>
-            </button>
-            <button className="px-space-md py-2 rounded-lg font-label-md text-label-md text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors flex items-center gap-2">
-              <span>Paid</span>
-              <span className="px-2 py-0.5 rounded-full bg-surface-container-highest text-on-surface-variant font-label-sm text-label-sm">28</span>
-            </button>
-            <button className="px-space-md py-2 rounded-lg font-label-md text-label-md text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors flex items-center gap-2">
-              <span>Rejected</span>
-              <span className="px-2 py-0.5 rounded-full bg-surface-container-highest text-on-surface-variant font-label-sm text-label-sm">7</span>
-            </button>
-          </div>
-          <div className="flex items-center gap-space-sm text-on-surface-variant font-label-sm text-label-sm">
-            <span className="material-symbols-outlined text-[16px]">sync</span>
-            <span>Synced with Telebirr B2B &amp; CBE Core</span>
+            {[
+              { key: "all", label: "All", badge: "148", color: "" },
+              { key: "pending", label: "Pending Approval", badge: "19", color: "amber" },
+              { key: "approved", label: "Approved", badge: "94", color: "" },
+              { key: "paid", label: "Paid", badge: "28", color: "" },
+              { key: "rejected", label: "Rejected", badge: "7", color: "" },
+            ].map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                className={`px-space-md py-2 rounded-lg font-label-lg text-label-lg flex items-center gap-2 transition-colors ${
+                  activeTab === t.key
+                    ? "bg-surface-container-lowest text-on-surface font-semibold"
+                    : "text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high"
+                }`}
+              >
+                {t.key === "pending" && <span className="w-2 h-2 rounded-full bg-amber-500" />}
+                <span>{t.label}</span>
+                <span
+                  className={`px-2 py-0.5 rounded-full font-label-sm text-label-sm ${
+                    activeTab === t.key && t.key === "pending"
+                      ? "bg-amber-100 text-amber-800 font-semibold"
+                      : "bg-surface-container-highest text-on-surface-variant"
+                  }`}
+                >
+                  {t.badge}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
       {/* Filters & Controls Bar */}
-      <div className="bg-surface-container-lowest rounded-xl p-space-md shadow-sm mb-space-lg flex flex-wrap items-center gap-space-md justify-between">
+      <div className="bg-surface-container-lowest rounded-xl p-space-md  mb-space-lg flex flex-wrap items-center gap-space-md justify-between relative">
+        {openMenu && <div className="fixed inset-0 z-10" onClick={() => setOpenMenu(null)} />}
         <div className="flex-1 min-w-[280px] max-w-md relative">
           <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
-          <input className="w-full h-10 pl-9 pr-4 bg-surface-container-low rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary shadow-sm" placeholder="Search by employee name, pharmacy, invoice #, claim ID..." type="text" />
+          <input className="w-full h-10 pl-9 pr-4 bg-surface-container-low rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary " placeholder="Search by employee name, pharmacy, invoice #, claim ID..." type="text" />
         </div>
         <div className="flex flex-wrap items-center gap-space-sm">
-          <div className="relative group">
-            <button className="h-10 px-3 bg-surface-container-low hover:bg-surface-container rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface transition-colors shadow-sm">
+          <div className="relative">
+            <button onClick={() => setOpenMenu(openMenu === "calendar" ? null : "calendar")} className="h-10 px-3 bg-surface-container-low hover:bg-surface-container rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface transition-colors ">
               <span className="material-symbols-outlined text-[18px] text-primary">calendar_month</span>
-              <span>Oct 1 - Oct 31, 2024</span>
+              <span>{calendar}</span>
               <span className="material-symbols-outlined text-[16px] text-outline">expand_more</span>
             </button>
-          </div>
-          <div className="relative group">
-            <button className="h-10 px-3 bg-surface-container-low hover:bg-surface-container rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface transition-colors shadow-sm">
-              <span className="material-symbols-outlined text-[18px] text-outline">domain</span>
-              <span>All Departments</span>
-              <span className="material-symbols-outlined text-[16px] text-outline">expand_more</span>
-            </button>
-          </div>
-          <div className="relative group">
-            <button className="h-10 px-3 bg-surface-container-low hover:bg-surface-container rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface transition-colors shadow-sm">
-              <span className="material-symbols-outlined text-[18px] text-outline">local_pharmacy</span>
-              <span>All Pharmacies (Kenema, Lion, Kadisco...)</span>
-              <span className="material-symbols-outlined text-[16px] text-outline">expand_more</span>
-            </button>
+            {openMenu === "calendar" && (
+              <div className="absolute z-20 mt-1 w-48 bg-surface-container-lowest rounded-lg shadow-lg border border-surface-container-high py-1">
+                {["Oct 1 - Oct 31, 2024", "Nov 1 - Nov 30, 2024", "Dec 1 - Dec 31, 2024"].map((opt) => (
+                  <button key={opt} onClick={() => { setCalendar(opt); setOpenMenu(null); }} className="w-full text-left px-3 py-2 font-body-sm text-body-sm hover:bg-surface-container-low">{opt}</button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="relative">
-            <button className="h-10 px-4 bg-surface-container-high hover:bg-surface-container-highest text-on-surface rounded-lg font-label-md text-label-md font-semibold flex items-center gap-2 transition-colors">
+            <button onClick={() => setOpenMenu(openMenu === "department" ? null : "department")} className="h-10 px-3 bg-surface-container-low hover:bg-surface-container rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface transition-colors ">
+              <span className="material-symbols-outlined text-[18px] text-outline">domain</span>
+              <span>{department}</span>
+              <span className="material-symbols-outlined text-[16px] text-outline">expand_more</span>
+            </button>
+            {openMenu === "department" && (
+              <div className="absolute z-20 mt-1 w-48 bg-surface-container-lowest rounded-lg shadow-lg border border-surface-container-high py-1">
+                {["All Departments", "Tech", "HR", "Logistics", "Marketing", "Finance"].map((opt) => (
+                  <button key={opt} onClick={() => { setDepartment(opt); setOpenMenu(null); }} className="w-full text-left px-3 py-2 font-body-sm text-body-sm hover:bg-surface-container-low">{opt}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="relative">
+            <button onClick={() => setOpenMenu(openMenu === "pharmacy" ? null : "pharmacy")} className="h-10 px-3 bg-surface-container-low hover:bg-surface-container rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface transition-colors ">
+              <span className="material-symbols-outlined text-[18px] text-outline">local_pharmacy</span>
+              <span>{pharmacy === "All Pharmacies" ? "All Pharmacies (Kenema, Lion, Kadisco...)" : pharmacy}</span>
+              <span className="material-symbols-outlined text-[16px] text-outline">expand_more</span>
+            </button>
+            {openMenu === "pharmacy" && (
+              <div className="absolute z-20 mt-1 w-56 bg-surface-container-lowest rounded-lg shadow-lg border border-surface-container-high py-1">
+                {["All Pharmacies", "Kenema Pharmacy Bole", "Lion Pharmacy Kazanchis", "Red Cross Pharmacy Mexico", "St. Gabriel General Hospital"].map((opt) => (
+                  <button key={opt} onClick={() => { setPharmacy(opt); setOpenMenu(null); }} className="w-full text-left px-3 py-2 font-body-sm text-body-sm hover:bg-surface-container-low">{opt}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="relative">
+            <button onClick={() => setOpenMenu(openMenu === "batch" ? null : "batch")} className="h-10 px-4 bg-surface-container-high hover:bg-surface-container-highest text-on-surface rounded-lg font-label-md text-label-md font-semibold flex items-center gap-2 transition-colors">
               <span className="material-symbols-outlined text-[18px]">checklist</span>
               <span>Batch Actions</span>
               <span className="material-symbols-outlined text-[16px]">arrow_drop_down</span>
             </button>
+            {openMenu === "batch" && (
+              <div className="absolute z-20 mt-1 w-48 bg-surface-container-lowest rounded-lg shadow-lg border border-surface-container-high py-1">
+                {["Approve Selected", "Reject Selected", "Mark as Paid", "Export CSV"].map((opt) => (
+                  <button key={opt} onClick={() => { alert(opt); setOpenMenu(null); }} className="w-full text-left px-3 py-2 font-body-sm text-body-sm hover:bg-surface-container-low">{opt}</button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -119,10 +142,9 @@ export default function ClaimsPage() {
       <div className="grid grid-cols-12 gap-space-lg items-start">
         {/* LEFT: Claim Management Ledger Table */}
         <div className="col-span-12 flex flex-col gap-space-md">
-          <div className="bg-surface-container-lowest rounded-xl shadow-sm overflow-hidden">
+          <div className="bg-surface-container-lowest rounded-xl  overflow-hidden">
             <div className="p-space-md bg-surface-container-low flex items-center justify-between">
               <div className="flex items-center gap-space-sm">
-                <input className="w-4 h-4 rounded text-primary focus:ring-primary accent-primary cursor-pointer" type="checkbox" />
                 <span className="font-label-sm text-label-sm text-on-surface uppercase font-semibold">19 Pending Clinical Verifications</span>
               </div>
               <div className="flex items-center gap-space-sm">
@@ -136,7 +158,6 @@ export default function ClaimsPage() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-surface-container-low text-on-surface-variant font-label-sm text-label-sm uppercase tracking-wider">
-                    <th className="py-3 px-space-md w-10" />
                     <th className="py-3 px-space-md">Claim ID &amp; Employee</th>
                     <th className="py-3 px-space-md">Pharmacy &amp; Medication</th>
                     <th className="py-3 px-space-md text-right">Invoice (ETB)</th>
@@ -146,15 +167,12 @@ export default function ClaimsPage() {
                 </thead>
                 <tbody className="divide-y divide-surface-container-high/40">
                   {/* Row 1 selected */}
-                  <tr className="bg-primary/5 hover:bg-primary/10 transition-colors cursor-pointer group relative" onClick={() => router.push("/claims/CLM-8921")}>
-                    <td className="py-space-md px-space-md">
-                      <input defaultChecked className="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox" />
-                    </td>
+                  <tr className="bg-primary/5 hover:bg-primary/10 transition-colors cursor-pointer group relative" onClick={() => router.push("/claims/CLM-8921")} style={{ display: (activeTab === "all" || activeTab === "pending") && (department === "All Departments" || department === "Tech") && (pharmacy === "All Pharmacies" || pharmacy === "Kenema Pharmacy Bole") ? "" : "none" }}>
                     <td className="py-space-md px-space-md">
                       <div className="flex flex-col">
                         <div className="flex items-center gap-1.5">
                           <span className="font-label-md text-label-md font-bold text-primary">#CLM-8921</span>
-                          <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-primary" />
                         </div>
                         <span className="font-headline-sm text-body-md font-semibold text-on-surface">Dawit Bekele</span>
                         <span className="font-body-sm text-body-sm text-on-surface-variant">Software Eng • Tech</span>
@@ -170,7 +188,7 @@ export default function ClaimsPage() {
                         <span className="inline-block mt-0.5 px-1.5 py-0.2 font-label-sm text-[10px] rounded bg-surface-container text-on-surface-variant w-max">Chronic / Diabetes</span>
                       </div>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
+                    <td className="py-space-md px-space-md text-center align-middle">
                       <div className="flex flex-col items-end">
                         <span className="font-numeric-currency text-numeric-currency font-bold text-on-surface">5,200.00</span>
                         <span className="font-label-sm text-label-sm text-on-surface-variant">0% Co-pay</span>
@@ -182,15 +200,12 @@ export default function ClaimsPage() {
                         Pending
                       </span>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
-                      <span className="material-symbols-outlined text-primary text-[20px]">chevron_right</span>
+                    <td className="py-space-md px-space-md text-center align-middle">
+                      <button type="button" className="px-5 py-2 bg-primary text-on-primary rounded-md font-label-lg text-label-lg font-semibold transition-all">Detail</button>
                     </td>
                   </tr>
                   {/* Row 2 */}
-                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8921")}>
-                    <td className="py-space-md px-space-md">
-                      <input className="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox" />
-                    </td>
+                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8921")} style={{ display: (activeTab === "all" || activeTab === "pending") && (department === "All Departments" || department === "HR") && (pharmacy === "All Pharmacies" || pharmacy === "Lion Pharmacy Kazanchis") ? "" : "none" }}>
                     <td className="py-space-md px-space-md">
                       <div className="flex flex-col">
                         <span className="font-label-md text-label-md font-medium text-on-surface-variant">#CLM-8920</span>
@@ -208,7 +223,7 @@ export default function ClaimsPage() {
                         <span className="inline-block mt-0.5 px-1.5 py-0.2 font-label-sm text-[10px] rounded bg-surface-container text-on-surface-variant w-max">Respiratory</span>
                       </div>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
+                    <td className="py-space-md px-space-md text-center align-middle">
                       <div className="flex flex-col items-end">
                         <span className="font-numeric-currency text-numeric-currency font-semibold text-on-surface">2,150.00</span>
                         <span className="font-label-sm text-label-sm text-on-surface-variant">10% Co-pay</span>
@@ -220,15 +235,12 @@ export default function ClaimsPage() {
                         Pending
                       </span>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
-                      <span className="material-symbols-outlined text-outline group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+                    <td className="py-space-md px-space-md text-center align-middle">
+                      <button type="button" className="px-5 py-2 bg-surface-container-low hover:bg-surface-container text-on-surface rounded-md font-label-lg text-label-lg font-semibold transition-all">Detail</button>
                     </td>
                   </tr>
                   {/* Row 3 */}
-                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8920")}>
-                    <td className="py-space-md px-space-md">
-                      <input className="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox" />
-                    </td>
+                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8920")} style={{ display: (activeTab === "all" || activeTab === "approved") && (department === "All Departments" || department === "Finance") && (pharmacy === "All Pharmacies" || pharmacy === "Kadisco General Hospital") ? "" : "none" }}>
                     <td className="py-space-md px-space-md">
                       <div className="flex flex-col">
                         <span className="font-label-md text-label-md font-medium text-on-surface-variant">#CLM-8919</span>
@@ -246,7 +258,7 @@ export default function ClaimsPage() {
                         <span className="inline-block mt-0.5 px-1.5 py-0.2 font-label-sm text-[10px] rounded bg-surface-container text-on-surface-variant w-max">Cardiovascular</span>
                       </div>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
+                    <td className="py-space-md px-space-md text-center align-middle">
                       <div className="flex flex-col items-end">
                         <span className="font-numeric-currency text-numeric-currency font-semibold text-on-surface">3,400.00</span>
                         <span className="font-label-sm text-label-sm text-on-surface-variant">Reimbursable</span>
@@ -258,15 +270,12 @@ export default function ClaimsPage() {
                         Approved
                       </span>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
-                      <span className="material-symbols-outlined text-outline group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+                    <td className="py-space-md px-space-md text-center align-middle">
+                      <button type="button" className="px-5 py-2 bg-surface-container-low hover:bg-surface-container text-on-surface rounded-md font-label-lg text-label-lg font-semibold transition-all">Detail</button>
                     </td>
                   </tr>
                   {/* Row 4 */}
-                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8919")}>
-                    <td className="py-space-md px-space-md">
-                      <input className="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox" />
-                    </td>
+                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8919")} style={{ display: (activeTab === "all" || activeTab === "paid") && (department === "All Departments" || department === "Marketing") && (pharmacy === "All Pharmacies" || pharmacy === "St. Gabriel General Hospital") ? "" : "none" }}>
                     <td className="py-space-md px-space-md">
                       <div className="flex flex-col">
                         <span className="font-label-md text-label-md font-medium text-on-surface-variant">#CLM-8918</span>
@@ -284,7 +293,7 @@ export default function ClaimsPage() {
                         <span className="inline-block mt-0.5 px-1.5 py-0.2 font-label-sm text-[10px] rounded bg-surface-container text-on-surface-variant w-max">Endocrine</span>
                       </div>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
+                    <td className="py-space-md px-space-md text-center align-middle">
                       <div className="flex flex-col items-end">
                         <span className="font-numeric-currency text-numeric-currency font-semibold text-on-surface">1,890.00</span>
                         <span className="font-label-sm text-label-sm text-on-surface-variant">Telebirr Settled</span>
@@ -296,15 +305,12 @@ export default function ClaimsPage() {
                         Paid
                       </span>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
-                      <span className="material-symbols-outlined text-outline group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+                    <td className="py-space-md px-space-md text-center align-middle">
+                      <button type="button" className="px-5 py-2 bg-surface-container-low hover:bg-surface-container text-on-surface rounded-md font-label-lg text-label-lg font-semibold transition-all">Detail</button>
                     </td>
                   </tr>
                   {/* Row 5 */}
-                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8918")}>
-                    <td className="py-space-md px-space-md">
-                      <input className="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox" />
-                    </td>
+                  <tr className="hover:bg-surface-container-low transition-colors cursor-pointer group" onClick={() => router.push("/claims/CLM-8918")} style={{ display: (activeTab === "all" || activeTab === "rejected") && (department === "All Departments" || department === "Logistics") && (pharmacy === "All Pharmacies" || pharmacy === "Red Cross Pharmacy Mexico") ? "" : "none" }}>
                     <td className="py-space-md px-space-md">
                       <div className="flex flex-col">
                         <span className="font-label-md text-label-md font-medium text-on-surface-variant">#CLM-8917</span>
@@ -322,7 +328,7 @@ export default function ClaimsPage() {
                         <span className="inline-block mt-0.5 px-1.5 py-0.2 font-label-sm text-[10px] rounded bg-surface-container text-on-surface-variant w-max">Dermatology</span>
                       </div>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
+                    <td className="py-space-md px-space-md text-center align-middle">
                       <div className="flex flex-col items-end">
                         <span className="font-numeric-currency text-numeric-currency font-semibold text-on-surface">820.00</span>
                         <span className="font-label-sm text-label-sm text-error">Missing Stamp</span>
@@ -334,8 +340,8 @@ export default function ClaimsPage() {
                         Rejected
                       </span>
                     </td>
-                    <td className="py-space-md px-space-md text-right align-top">
-                      <span className="material-symbols-outlined text-outline group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+                    <td className="py-space-md px-space-md text-center align-middle">
+                      <button type="button" className="px-5 py-2 bg-surface-container-low hover:bg-surface-container text-on-surface rounded-md font-label-lg text-label-lg font-semibold transition-all">Detail</button>
                     </td>
                   </tr>
                 </tbody>
@@ -346,19 +352,12 @@ export default function ClaimsPage() {
                 <span>Showing rows 1 - 5 of 19 Pending Claims</span>
               </div>
               <div className="flex items-center gap-1">
-                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface shadow-sm disabled:opacity-40" disabled>Previous</button>
+                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface  disabled:opacity-40" disabled>Previous</button>
                 <button className="px-2.5 py-1 rounded bg-primary text-on-primary font-semibold">1</button>
-                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface shadow-sm hover:bg-surface-container">2</button>
-                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface shadow-sm hover:bg-surface-container">3</button>
-                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface shadow-sm hover:bg-surface-container">Next</button>
+                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface  hover:bg-surface-container">2</button>
+                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface  hover:bg-surface-container">3</button>
+                <button className="px-2.5 py-1 rounded bg-surface-container-lowest text-on-surface  hover:bg-surface-container">Next</button>
               </div>
-            </div>
-          </div>
-          <div className="p-space-md rounded-xl bg-surface-container-high/60 flex items-start gap-space-md">
-            <span className="material-symbols-outlined text-primary text-[22px] mt-0.5">verified</span>
-            <div className="flex flex-col">
-              <span className="font-headline-sm text-headline-sm text-on-surface">Ethiopian FDA &amp; EPHI Compliance Check</span>
-              <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">All electronic pharmacy vouchers processed through TenaCare are cross-verified with the Ethiopian Ministry of Health drug catalog. Prescriptions exceeding ETB 10,000 require senior physician endorsement.</p>
             </div>
           </div>
         </div>

@@ -14,7 +14,6 @@ const navItems = [
   { path: "payments", label: "Payments", icon: "credit_card", href: "/payments", badge: null },
   { path: "employees", label: "Employees", icon: "group", href: "/employees", badge: null },
   { path: "reports", label: "Reports", icon: "bar_chart", href: "/reports", badge: null },
-  { path: "settings", label: "Settings", icon: "settings", href: "#", badge: null },
 ];
 
 function activePathFrom(pathname: string) {
@@ -38,7 +37,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
         />
       ) : null}
       <aside
-        className={`fixed left-0 top-0 h-full w-64 bg-surface-container-low shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-50 flex flex-col justify-between transform transition-transform duration-200 lg:translate-x-0 ${
+        className={`fixed left-0 top-0 h-full w-64 bg-surface-container-low  z-50 flex flex-col justify-between transform transition-transform duration-200 lg:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -62,7 +61,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 const base =
                   "group flex items-center justify-between px-space-md py-2.5 transition-all rounded-lg";
                 const cls = isActive
-                  ? `${base} bg-primary-container text-on-primary-container font-semibold shadow-sm`
+                  ? `${base} bg-primary text-on-primary font-semibold`
                   : `${base} text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface`;
                 return (
                   <Link
@@ -86,17 +85,6 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               })}
             </nav>
           </div>
-        </div>
-        <div className="p-space-md m-space-md rounded-xl bg-surface-container-lowest shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]">
-          <div className="flex items-center gap-space-sm mb-1">
-            <span className="material-symbols-outlined text-primary text-[18px]">verified</span>
-            <span className="font-label-sm text-label-sm text-on-surface-variant">
-              Addis Ababa Clinical Net
-            </span>
-          </div>
-          <p className="font-body-sm text-body-sm text-on-surface-variant">
-            Tier-1 direct billing active for Kenema &amp; Bole Hubs.
-          </p>
         </div>
       </aside>
     </>

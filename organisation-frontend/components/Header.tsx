@@ -4,7 +4,7 @@ type HeaderProps = {
 
 export default function Header({ onMenuClick }: HeaderProps) {
   return (
-    <header className="fixed top-0 left-0 lg:left-64 right-0 h-16 bg-surface/90 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)] z-40 flex items-center justify-between px-space-md sm:px-space-xl gap-space-md sm:gap-space-lg">
+    <header className="fixed top-0 left-0 lg:left-64 right-0 h-16 bg-surface z-40 flex items-center justify-between px-space-md sm:px-space-xl gap-space-md sm:gap-space-lg">
       <button
         aria-label="Open menu"
         className="lg:hidden p-2 rounded-full hover:bg-surface-container-high text-on-surface-variant"
@@ -19,19 +19,13 @@ export default function Header({ onMenuClick }: HeaderProps) {
             search
           </span>
           <input
-            className="w-full h-10 pl-10 pr-4 bg-surface-container-lowest rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+            className="w-full h-10 pl-10 pr-4 bg-surface-container-lowest rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary "
             placeholder="Search claims, employees, pharmacies, invoices..."
             type="text"
           />
         </div>
       </div>
       <div className="flex items-center gap-space-md sm:gap-space-lg">
-        <div className="hidden md:flex items-center gap-2 bg-surface-container-high px-3 py-1.5 rounded-full">
-          <span className="font-label-md text-label-md text-on-surface font-semibold">
-            EthioTelecom Corp - HR Admin
-          </span>
-          <span className="material-symbols-outlined text-primary text-[18px]">verified</span>
-        </div>
         <button
           aria-label="Notifications"
           className="relative p-2 rounded-full hover:bg-surface-container-high text-on-surface-variant transition-colors"

@@ -6,6 +6,7 @@ export default function PaymentsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [paid, setPaid] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState("ready");
 
   const openBatchModal = () => setModalOpen(true);
   const closeBatchModal = () => setModalOpen(false);
@@ -45,25 +46,12 @@ export default function PaymentsPage() {
       {/* Top Command & Action Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-space-lg py-space-xl">
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-space-sm">
-            <span className="font-label-sm text-label-sm uppercase tracking-wider text-primary font-semibold">Treasury &amp; Settlement Desk</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-primary/40" />
-            <span className="font-label-sm text-label-sm text-on-surface-variant">FY 2024 / Ethiopian Payroll Q3</span>
-          </div>
           <h1 className="font-display-lg text-display-lg text-on-surface tracking-tight">Payment Disbursement &amp; Settlement</h1>
           <p className="font-body-md text-body-md text-on-surface-variant max-w-2xl">
             Process reimbursement payouts for approved prescription claims via direct corporate bank integrations (CBE, Awash, Dashen, &amp; Telebirr Batch).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-space-md">
-          <button
-            type="button"
-            onClick={triggerBatchExport}
-            className="inline-flex items-center gap-space-sm px-4 py-2.5 rounded-lg bg-surface-container-lowest text-on-surface shadow-sm hover:bg-surface-container-high transition-all"
-          >
-            <span className="material-symbols-outlined text-[19px] text-primary">download</span>
-            <span className="font-label-lg text-label-lg">Export Payment File (CSV / ABA / Telebirr)</span>
-          </button>
           <button
             type="button"
             onClick={openBatchModal}
@@ -83,18 +71,6 @@ export default function PaymentsPage() {
               <span className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Ready for Reimbursement</span>
               <span className="font-display-lg text-display-lg text-on-surface mt-1 tracking-tight">ETB 412,850.00</span>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-primary-fixed/40 flex items-center justify-center text-primary">
-              <span className="material-symbols-outlined text-[22px]">account_balance_wallet</span>
-            </div>
-          </div>
-          <div className="mt-4 flex items-center justify-between pt-2">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-semibold">38 Claims</span>
-              <span className="font-body-sm text-body-sm text-on-surface-variant">Validated &amp; cleared for transfer</span>
-            </div>
-            <svg className="w-16 h-6 text-primary stroke-current fill-none stroke-2" viewBox="0 0 64 24">
-              <path d="M2 18 L16 12 L30 16 L44 8 L62 4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
           </div>
         </div>
         <div className="relative overflow-hidden rounded-xl bg-surface-container-lowest p-space-lg shadow-sm flex flex-col justify-between">
@@ -103,18 +79,6 @@ export default function PaymentsPage() {
               <span className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Processed This Month</span>
               <span className="font-display-lg text-display-lg text-on-surface mt-1 tracking-tight">ETB 1,429,650.00</span>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-secondary-container/50 flex items-center justify-center text-secondary">
-              <span className="material-symbols-outlined text-[22px]">check_circle</span>
-            </div>
-          </div>
-          <div className="mt-4 flex items-center justify-between pt-2">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-tertiary-container text-on-tertiary-container font-label-sm text-label-sm font-semibold">110 Claims</span>
-              <span className="font-body-sm text-body-sm text-on-surface-variant">Disbursed with bank receipts</span>
-            </div>
-            <svg className="w-16 h-6 text-secondary stroke-current fill-none stroke-2" viewBox="0 0 64 24">
-              <path d="M2 20 L15 17 L28 12 L45 9 L62 3" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
           </div>
         </div>
         <div className="relative overflow-hidden rounded-xl bg-surface-container-lowest p-space-lg shadow-sm flex flex-col justify-between">
@@ -123,55 +87,29 @@ export default function PaymentsPage() {
               <span className="font-label-md text-label-md text-error uppercase tracking-wider">Failed / Held Payouts</span>
               <span className="font-display-lg text-display-lg text-on-surface mt-1 tracking-tight">ETB 8,400.00</span>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-error-container/60 flex items-center justify-center text-error">
-              <span className="material-symbols-outlined text-[22px]">error</span>
-            </div>
-          </div>
-          <div className="mt-4 flex items-center justify-between pt-2">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm text-label-sm font-semibold">2 Invalid Accounts</span>
-              <span className="font-body-sm text-body-sm text-on-surface-variant">Requires employee update</span>
-            </div>
-            <button className="font-label-sm text-label-sm text-error underline hover:text-on-error-container">Resolve</button>
           </div>
         </div>
       </div>
 
-      {/* Gateway Channels Micro-Strip */}
-      <div className="mb-space-lg grid grid-cols-2 sm:grid-cols-4 gap-space-md">
-        {[
-          { code: "CBE", name: "Commercial Bank", sub: "Host-to-Host Online" },
-          { code: "TB", name: "Telebirr Bulk Pay", sub: "Instant Settlement" },
-          { code: "AW", name: "Awash Direct", sub: "RTGS Batch Ready" },
-          { code: "DB", name: "Dashen Omnichannel", sub: "Active Cleared" },
-        ].map((g) => (
-          <div key={g.code} className="flex items-center gap-3 p-3 rounded-lg bg-surface-container-low shadow-sm">
-            <div className="w-8 h-8 rounded-full bg-surface-container-lowest flex items-center justify-center font-label-sm text-label-sm font-bold text-primary">{g.code}</div>
-            <div className="flex flex-col">
-              <span className="font-label-sm text-label-sm text-on-surface font-semibold">{g.name}</span>
-              <span className="font-body-sm text-body-sm text-on-surface-variant">{g.sub}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+      
 
       {/* Primary Interactive Table Card */}
       <div className="rounded-xl bg-surface-container-lowest shadow-sm overflow-hidden flex flex-col">
         <div className="p-space-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-space-md bg-surface-container-low">
           <div className="flex items-center gap-2 overflow-x-auto w-full md:w-auto">
-            <button className="px-4 py-2 rounded-lg bg-primary-container text-on-primary-container font-label-md text-label-md font-semibold shadow-sm flex items-center gap-2 whitespace-nowrap">
+            <button onClick={() => setActiveTab("ready")} className={activeTab === "ready" ? "px-4 py-2 rounded-lg bg-primary-container text-on-primary-container font-label-md text-label-md font-semibold shadow-sm flex items-center gap-2 whitespace-nowrap" : "px-4 py-2 rounded-lg bg-surface-container-lowest text-on-surface-variant hover:text-on-surface font-label-md text-label-md font-medium transition-colors flex items-center gap-2 whitespace-nowrap"}>
               <span>Ready to Pay</span>
               <span className="px-1.5 py-0.5 rounded-full bg-primary text-on-primary font-label-sm text-label-sm">38</span>
             </button>
-            <button className="px-4 py-2 rounded-lg bg-surface-container-lowest text-on-surface-variant hover:text-on-surface font-label-md text-label-md font-medium transition-colors flex items-center gap-2 whitespace-nowrap">
+            <button onClick={() => setActiveTab("processing")} className={activeTab === "processing" ? "px-4 py-2 rounded-lg bg-primary-container text-on-primary-container font-label-md text-label-md font-semibold shadow-sm flex items-center gap-2 whitespace-nowrap" : "px-4 py-2 rounded-lg bg-surface-container-lowest text-on-surface-variant hover:text-on-surface font-label-md text-label-md font-medium transition-colors flex items-center gap-2 whitespace-nowrap"}>
               <span>Processing #BATCH-104</span>
               <span className="px-1.5 py-0.5 rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm">14</span>
             </button>
-            <button className="px-4 py-2 rounded-lg bg-surface-container-lowest text-on-surface-variant hover:text-on-surface font-label-md text-label-md font-medium transition-colors flex items-center gap-2 whitespace-nowrap">
+            <button onClick={() => setActiveTab("completed")} className={activeTab === "completed" ? "px-4 py-2 rounded-lg bg-primary-container text-on-primary-container font-label-md text-label-md font-semibold shadow-sm flex items-center gap-2 whitespace-nowrap" : "px-4 py-2 rounded-lg bg-surface-container-lowest text-on-surface-variant hover:text-on-surface font-label-md text-label-md font-medium transition-colors flex items-center gap-2 whitespace-nowrap"}>
               <span>Completed Payments</span>
               <span className="px-1.5 py-0.5 rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm">110</span>
             </button>
-            <button className="px-4 py-2 rounded-lg bg-surface-container-lowest text-error hover:bg-error-container/40 font-label-md text-label-md font-medium transition-colors flex items-center gap-2 whitespace-nowrap">
+            <button onClick={() => setActiveTab("failed")} className={activeTab === "failed" ? "px-4 py-2 rounded-lg bg-error-container text-on-error-container font-label-md text-label-md font-semibold shadow-sm flex items-center gap-2 whitespace-nowrap" : "px-4 py-2 rounded-lg bg-surface-container-lowest text-error hover:bg-error-container/40 font-label-md text-label-md font-medium transition-colors flex items-center gap-2 whitespace-nowrap"}>
               <span>Failed Payouts</span>
               <span className="px-1.5 py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm text-label-sm">2</span>
             </button>

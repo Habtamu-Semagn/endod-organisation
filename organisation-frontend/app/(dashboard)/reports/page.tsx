@@ -6,7 +6,7 @@ export default function ReportsPage() {
         <div className="flex flex-col gap-1 max-w-2xl">
           <div className="flex items-center gap-space-sm mb-1">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-secondary-container/50 text-on-secondary-container font-label-sm text-label-sm uppercase tracking-wider font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+              <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
               Fiscal Cycle FY 2024 • Q4
             </span>
             <span className="text-outline text-label-sm font-label-sm">•</span>
@@ -18,53 +18,19 @@ export default function ReportsPage() {
           </p>
         </div>
         <div className="flex items-center gap-space-md self-start lg:self-auto shrink-0">
-          <button className="group inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-surface-container-lowest text-on-surface hover:bg-surface-container-high transition-all shadow-sm font-label-lg text-label-lg" type="button">
+          <button className="group inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-surface-container-lowest text-on-surface hover:bg-surface-container-high transition-all  font-label-lg text-label-lg" type="button">
             <span className="material-symbols-outlined text-[18px] text-outline group-hover:text-on-surface transition-colors">description</span>
             <span>Download PDF Statement</span>
           </button>
-          <button className="inline-flex items-center gap-2 h-10 px-5 rounded-lg bg-primary text-on-primary hover:bg-primary-container transition-all shadow-sm font-label-lg text-label-lg shadow-primary/20" type="button">
+          <button className="inline-flex items-center gap-2 h-10 px-5 rounded-lg bg-primary text-on-primary hover:bg-primary-container transition-all  font-label-lg text-label-lg " type="button">
             <span className="material-symbols-outlined text-[18px]">table_view</span>
             <span>Download Excel / CSV</span>
           </button>
         </div>
       </div>
-      {/* Filter & Granularity Control Ribbon */}
-      <div className="p-space-md rounded-xl bg-surface-container-lowest shadow-sm mb-space-xl flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-space-md">
-        <div className="flex flex-wrap items-center gap-space-sm flex-1">
-          <div className="relative">
-            <button className="flex items-center gap-2 h-10 px-3 bg-surface rounded-lg font-label-md text-label-md text-on-surface hover:bg-surface-container-low transition-colors" id="dateRangeBtn">
-              <span className="material-symbols-outlined text-[18px] text-primary">calendar_today</span>
-              <span className="font-semibold">FY 2024 (Oct 1 - Oct 31, 2024)</span>
-              <span className="material-symbols-outlined text-[18px] text-outline">arrow_drop_down</span>
-            </button>
-          </div>
-          <div className="relative">
-            <button className="flex items-center gap-2 h-10 px-3 bg-surface rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low transition-colors">
-              <span className="material-symbols-outlined text-[18px] text-outline">corporate_fare</span>
-              <span>Department: <strong className="text-on-surface font-semibold">All Departments</strong></span>
-              <span className="material-symbols-outlined text-[18px] text-outline">expand_more</span>
-            </button>
-          </div>
-          <div className="relative">
-            <button className="flex items-center gap-2 h-10 px-3 bg-surface rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-low transition-colors">
-              <span className="material-symbols-outlined text-[18px] text-outline">local_pharmacy</span>
-              <span>Network: <strong className="text-on-surface font-semibold">All Networks (Lion, Kenema, etc.)</strong></span>
-              <span className="material-symbols-outlined text-[18px] text-outline">expand_more</span>
-            </button>
-          </div>
-        </div>
-        <div className="flex items-center self-start xl:self-auto bg-surface p-1 rounded-lg">
-          <button className="px-3.5 py-1.5 rounded font-label-sm text-label-sm font-semibold transition-all bg-primary-container text-on-primary-container shadow-xs">
-            Prescription Reimbursements
-          </button>
-          <button className="px-3.5 py-1.5 rounded font-label-sm text-label-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">
-            Direct Network Invoices
-          </button>
-        </div>
-      </div>
       {/* Summary KPI Section */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-space-lg mb-space-xl">
-        <div className="p-space-lg rounded-xl bg-surface-container-lowest shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+        <div className="p-space-lg rounded-xl bg-surface-container-lowest  flex flex-col justify-between hover: transition-shadow">
           <div className="flex items-start justify-between">
             <div className="flex flex-col">
               <span className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant font-semibold">Total Medication Spend</span>
@@ -73,22 +39,9 @@ export default function ReportsPage() {
                 <span className="font-label-md text-label-md text-on-surface-variant">.00</span>
               </div>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-primary-fixed/30 flex items-center justify-center text-primary">
-              <span className="material-symbols-outlined text-[22px]">payments</span>
-            </div>
-          </div>
-          <div className="mt-4 pt-3 flex items-center justify-between">
-            <div className="inline-flex items-center gap-1 font-label-sm text-label-sm font-semibold text-tertiary">
-              <span className="material-symbols-outlined text-[16px]">trending_up</span>
-              <span>+12.4%</span>
-              <span className="text-on-surface-variant font-normal">vs prev cycle</span>
-            </div>
-            <svg className="w-16 h-5 text-tertiary" fill="none" preserveAspectRatio="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 64 20">
-              <path d="M0 16 L12 14 L24 18 L36 9 L48 11 L64 3" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
           </div>
         </div>
-        <div className="p-space-lg rounded-xl bg-surface-container-lowest shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+        <div className="p-space-lg rounded-xl bg-surface-container-lowest  flex flex-col justify-between hover: transition-shadow">
           <div className="flex items-start justify-between">
             <div className="flex flex-col">
               <span className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant font-semibold">Total Claims Processed</span>
@@ -97,18 +50,9 @@ export default function ReportsPage() {
                 <span className="font-label-md text-label-md text-on-surface-variant">Claims</span>
               </div>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-secondary">
-              <span className="material-symbols-outlined text-[22px]">verified_user</span>
-            </div>
-          </div>
-          <div className="mt-4 pt-3 flex items-center justify-between">
-            <span className="font-label-sm text-label-sm text-on-surface-variant">
-              <strong className="text-primary font-semibold">98.4%</strong> turnaround within SLA
-            </span>
-            <span className="px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-[10px] font-bold">T-24h</span>
           </div>
         </div>
-        <div className="p-space-lg rounded-xl bg-surface-container-lowest shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+        <div className="p-space-lg rounded-xl bg-surface-container-lowest  flex flex-col justify-between hover: transition-shadow">
           <div className="flex items-start justify-between">
             <div className="flex flex-col">
               <span className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant font-semibold">Average Claim Value</span>
@@ -117,18 +61,9 @@ export default function ReportsPage() {
                 <span className="font-label-md text-label-md text-on-surface-variant">.32</span>
               </div>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-secondary-fixed/40 flex items-center justify-center text-on-secondary-container">
-              <span className="material-symbols-outlined text-[22px]">query_stats</span>
-            </div>
-          </div>
-          <div className="mt-4 pt-3 flex items-center justify-between">
-            <span className="font-label-sm text-label-sm text-on-surface-variant">
-              Median Value: <strong className="text-on-surface font-semibold font-numeric-currency">ETB 4,200.00</strong>
-            </span>
-            <span className="material-symbols-outlined text-[16px] text-outline" title="Skewed by monthly maintenance regimens">info</span>
           </div>
         </div>
-        <div className="p-space-lg rounded-xl bg-surface-container-lowest shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+        <div className="p-space-lg rounded-xl bg-surface-container-lowest  flex flex-col justify-between hover: transition-shadow">
           <div className="flex items-start justify-between">
             <div className="flex flex-col">
               <span className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant font-semibold">Employees Supported</span>
@@ -137,21 +72,12 @@ export default function ReportsPage() {
                 <span className="font-label-md text-label-md text-on-surface-variant">Beneficiaries</span>
               </div>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-primary">
-              <span className="material-symbols-outlined text-[22px]">family_restroom</span>
-            </div>
-          </div>
-          <div className="mt-4 pt-3 flex items-center justify-between">
-            <span className="font-label-sm text-label-sm text-on-surface-variant">
-              <strong className="text-on-surface font-semibold">75.4%</strong> eligible staff • 42 dependents
-            </span>
-            <span className="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
           </div>
         </div>
       </div>
       {/* Analytics Visualization Grid (2 Columns) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-lg mb-space-xl">
-        <div className="p-space-xl rounded-xl bg-surface-container-lowest shadow-sm flex flex-col justify-between">
+        <div className="p-space-xl rounded-xl bg-surface-container-lowest  flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-space-sm">
@@ -268,7 +194,7 @@ export default function ReportsPage() {
             </a>
           </div>
         </div>
-        <div className="p-space-xl rounded-xl bg-surface-container-lowest shadow-sm flex flex-col justify-between">
+        <div className="p-space-xl rounded-xl bg-surface-container-lowest  flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-space-sm">
@@ -352,16 +278,16 @@ export default function ReportsPage() {
         </div>
       </div>
       {/* Employee Utilization Ledger Card & Data Table */}
-      <div className="rounded-xl bg-surface-container-lowest shadow-sm mb-space-xl overflow-hidden">
+      <div className="rounded-xl bg-surface-container-lowest  mb-space-xl overflow-hidden">
         <div className="p-space-lg flex flex-col md:flex-row md:items-center justify-between gap-space-md">
           <div className="flex flex-col">
             <h2 className="font-headline-sm text-headline-sm text-on-surface">Employee Utilization Ledger (October 2024)</h2>
-            <span className="font-body-sm text-body-sm text-on-surface-variant">Real-time prescription claims authenticated via TenaCare smart card tokens</span>
+            <span className="font-body-sm text-body-sm text-on-surface-variant">Real-time prescription claims authenticated via Endod Health smart card tokens</span>
           </div>
           <div className="flex items-center gap-space-sm w-full md:w-auto">
             <div className="relative flex-1 md:w-72">
               <span className="material-symbols-outlined absolute left-3 top-2.5 text-outline text-[18px]">search</span>
-              <input className="w-full h-9 pl-9 pr-3 rounded-lg bg-surface font-body-sm text-body-sm text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary shadow-xs" placeholder="Filter by employee name, ID..." type="text" />
+              <input className="w-full h-9 pl-9 pr-3 rounded-lg bg-surface font-body-sm text-body-sm text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary " placeholder="Filter by employee name, ID..." type="text" />
             </div>
             <button className="h-9 px-3 rounded-lg bg-surface text-on-surface-variant hover:bg-surface-container-high transition-colors font-label-sm text-label-sm flex items-center gap-1.5 shrink-0">
               <span className="material-symbols-outlined text-[16px]">tune</span>
@@ -643,7 +569,7 @@ export default function ReportsPage() {
         </div>
       </div>
       {/* Bottom Regulatory & EFDA Formulary Audit Banner */}
-      <div className="p-space-lg rounded-xl bg-surface-container-low shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-space-md">
+      <div className="p-space-lg rounded-xl bg-surface-container-low  flex flex-col md:flex-row items-start md:items-center justify-between gap-space-md">
         <div className="flex items-start gap-space-md">
           <div className="w-10 h-10 rounded-lg bg-tertiary-container/15 text-tertiary flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-[24px]">verified_user</span>
@@ -660,7 +586,7 @@ export default function ReportsPage() {
         </div>
         <div className="shrink-0 flex items-center gap-2 self-end md:self-center">
           <span className="font-label-sm text-[11px] text-outline font-numeric-currency">Reg# EFDA/MED-2024-AA</span>
-          <button className="px-3 py-1.5 rounded-lg bg-surface-container-lowest text-on-surface hover:bg-surface-container-high transition-colors font-label-sm text-label-sm font-semibold shadow-xs">
+          <button className="px-3 py-1.5 rounded-lg bg-surface-container-lowest text-on-surface hover:bg-surface-container-high transition-colors font-label-sm text-label-sm font-semibold ">
             Audit Log
           </button>
         </div>

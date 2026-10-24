@@ -41,11 +41,11 @@ export default function ClaimDetailClient({ id }: { id: string }) {
           </span>
         </div>
         <p className='font-body-sm text-body-sm text-on-surface-variant'>
-          Submitted 2 hours ago via TenaCare Mobile
+          Submitted 2 hours ago via Endod Health Mobile
         </p>
       </header>
 
-      <section className='bg-surface-container-lowest rounded-xl shadow-sm border border-surface-container p-space-md flex flex-col gap-space-sm'>
+      <section className='bg-surface-container-lowest rounded-xl  border border-surface-container p-space-md flex flex-col gap-space-sm'>
         <div className='flex items-center gap-space-md'>
           <img
             className='w-12 h-12 rounded-full object-cover shrink-0'
@@ -69,11 +69,11 @@ export default function ClaimDetailClient({ id }: { id: string }) {
           <Detail label='Pharmacy' value='Kenema Pharmacy #4' sub='Bole Medhanialem • TIN 0048192831' />
           <Detail label='Medication' value='Insulin Glargine + Test Strips' sub='Chronic / Diabetes' />
           <Detail label='Prescriber' value='Dr. Tewodros Kassahun' sub='Hayat Hospital' />
-          <Detail label='DEDAN ID' value='DE-00492' sub='Verified' />
+          <Detail label='ENDOD ID' value='DE-00492' sub='Verified' />
         </div>
       </section>
 
-      <section className='bg-surface-container-lowest rounded-xl shadow-sm border border-surface-container p-space-md flex flex-col gap-2'>
+      <section className='bg-surface-container-lowest rounded-xl  border border-surface-container p-space-md flex flex-col gap-2'>
         <h2 className='font-label-md text-label-md uppercase tracking-wider text-on-surface-variant font-semibold'>
           Financial Breakdown
         </h2>
@@ -87,7 +87,7 @@ export default function ClaimDetailClient({ id }: { id: string }) {
         </div>
       </section>
 
-      <section className='bg-surface-container-lowest rounded-xl shadow-sm border border-surface-container p-space-md flex flex-col gap-space-sm'>
+      <section className='bg-surface-container-lowest rounded-xl  border border-surface-container p-space-md flex flex-col gap-space-sm'>
         <div className='flex items-center justify-between'>
           <h2 className='font-label-md text-label-md uppercase tracking-wider text-on-surface-variant font-semibold'>
             Attachments (2)
@@ -102,7 +102,7 @@ export default function ClaimDetailClient({ id }: { id: string }) {
         </div>
       </section>
 
-      <section className='bg-surface-container-lowest rounded-xl shadow-sm border border-surface-container p-space-md flex flex-col gap-2'>
+      <section className='bg-surface-container-lowest rounded-xl  border border-surface-container p-space-md flex flex-col gap-2'>
         <label className='font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant font-semibold'>
           Audit Note (optional)
         </label>
@@ -120,8 +120,8 @@ export default function ClaimDetailClient({ id }: { id: string }) {
           onClick={handleReject}
           className={
             rejectState === 'done'
-              ? 'h-11 px-4 rounded-lg bg-error text-on-error font-label-lg text-label-lg font-semibold shadow-sm flex items-center justify-center gap-2 pointer-events-none'
-              : 'h-11 px-4 rounded-lg bg-surface-container-lowest hover:bg-error-container text-error font-label-lg text-label-lg font-semibold shadow-sm flex items-center justify-center gap-2 transition-colors'
+              ? 'h-11 px-4 rounded-lg bg-error text-on-error font-label-lg text-label-lg font-semibold  flex items-center justify-center gap-2 pointer-events-none'
+              : 'h-11 px-4 rounded-lg bg-surface-container-lowest hover:bg-error-container text-error font-label-lg text-label-lg font-semibold  flex items-center justify-center gap-2 transition-colors'
           }
         >
           <span className='material-symbols-outlined text-[18px]'>
@@ -136,8 +136,8 @@ export default function ClaimDetailClient({ id }: { id: string }) {
           disabled={approveState !== 'idle'}
           className={
             approveState === 'done'
-              ? 'h-11 px-4 rounded-lg bg-tertiary text-on-primary font-label-lg text-label-lg font-bold shadow-md flex items-center justify-center gap-2'
-              : 'h-11 px-4 rounded-lg bg-primary hover:bg-secondary text-on-primary font-label-lg text-label-lg font-bold shadow-md flex items-center justify-center gap-2 transition-colors'
+              ? 'h-11 px-4 rounded-lg bg-tertiary text-on-primary font-label-lg text-label-lg font-bold  flex items-center justify-center gap-2'
+              : 'h-11 px-4 rounded-lg bg-primary hover:bg-secondary text-on-primary font-label-lg text-label-lg font-bold  flex items-center justify-center gap-2 transition-colors'
           }
         >
           {approveState === 'processing' ? (
