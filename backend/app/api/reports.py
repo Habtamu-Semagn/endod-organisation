@@ -40,6 +40,13 @@ def _period(session, org: str, date_from: Optional[date], date_to: Optional[date
     return date_from, date_to
 
 
+def label(spellings: Dict[str, list]) -> str:
+    """The name shown for a group of spellings of one medicine, the same on
+    every database: the most common spelling; on a tie, the one used first
+    (the earliest claim, then the lowest item id)."""
+    return min(spellings.items(), key=lambda kv: (-kv[1][0], kv[1][1]))[0]
+
+
 def build(session, org: str, start: date, end: date) -> Dict[str, Any]:
     rows = session.execute(
         select(Claim, Employee).join(Employee, Employee.id == Claim.employee_id)
@@ -48,7 +55,11 @@ def build(session, org: str, start: date, end: date) -> Dict[str, Any]:
                Claim.receipt_date >= start, Claim.receipt_date <= end)
         .order_by(Claim.receipt_date)).all()
     claim_ids = [c.id for c, _ in rows]
-    items = session.scalars(select(ClaimItem).where(ClaimItem.claim_id.in_(claim_ids))).all() if claim_ids else []
+    # Each item with its claim's number (claims are numbered in the order they were entered).
+    items = session.execute(
+        select(ClaimItem, Claim.number).join(Claim, Claim.id == ClaimItem.claim_id)
+        .where(ClaimItem.claim_id.in_(claim_ids))
+        .order_by(Claim.number, ClaimItem.id)).all() if claim_ids else []
 
     months: "OrderedDict[str, Dict[str, int]]" = OrderedDict()
     cursor = date(start.year, start.month, 1)
@@ -75,13 +86,18 @@ def build(session, org: str, start: date, end: date) -> Dict[str, Any]:
         person["claims"] += 1
         person["approved_santim"] += approved
     medicines: Dict[str, Dict[str, Any]] = {}
-    for item in items:
+    for item, claim_number in items:
         key = normalise_medicine(item.medicine)
-        entry = medicines.setdefault(key, {"medicine": item.medicine, "quantity": 0, "total_santim": 0,
-                                           "claims": set()})
+        entry = medicines.setdefault(key, {"quantity": 0, "total_santim": 0, "claims": set(), "spellings": {}})
         entry["quantity"] += item.quantity
         entry["total_santim"] += item.line_total_santim
         entry["claims"].add(item.claim_id)
+        # Per spelling: how often it was used, and where it was first used.
+        seen = entry["spellings"].setdefault(item.medicine, [0, (claim_number, item.id)])
+        seen[0] += 1
+        seen[1] = min(seen[1], (claim_number, item.id))
+    for entry in medicines.values():
+        entry["medicine"] = label(entry.pop("spellings"))
 
     approved_total = sum(c.approved_santim or 0 for c, _ in rows)
     return {

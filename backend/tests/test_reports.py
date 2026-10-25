@@ -93,3 +93,22 @@ def test_overview(portal):
     assert data["by_status"]["approved"]["claims"] == 3 and data["by_status"]["rejected"]["claims"] == 1
     assert data["employees"] == {"active": 2, "linked_endod": 0, "claimants": 2}
     assert data["policy_year"] == {"start": "2026-01-01", "end": "2026-12-31"}
+
+
+def test_a_medicine_is_shown_by_its_most_common_spelling():
+    from app.api.reports import label
+
+    # Most common wins.
+    assert label({"aspirin": [1, (1, "a")], "Aspirin": [2, (2, "b")]}) == "Aspirin"
+    # A tie goes to the spelling used first: earliest claim, then lowest item id.
+    assert label({"ASPIRIN": [1, (3, "a")], "Aspirin": [1, (2, "z")]}) == "Aspirin"
+    assert label({"ASPIRIN": [1, (2, "a")], "Aspirin": [1, (2, "b")]}) == "ASPIRIN"
+
+
+def test_the_medicine_label_does_not_depend_on_the_database_order(portal):
+    emp = portal.employee()
+    for spelling in ("ibuprofen 400MG", "Ibuprofen 400mg", "Ibuprofen 400mg", "IBUPROFEN 400MG"):
+        claim = portal.claim(emp["id"], items=[{"medicine": spelling, "quantity": 1, "unit_price_santim": 100}])
+        approve(portal, claim["id"])
+    rows = portal.get("/reports").json()["by_medicine"]
+    assert [(r["medicine"], r["quantity"], r["claims"]) for r in rows] == [("Ibuprofen 400mg", 4, 4)]
