@@ -4,3 +4,5 @@
 .env.*
 .pytest_cache
 tests
+.venv
+receipts
