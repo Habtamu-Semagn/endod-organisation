@@ -23,3 +23,19 @@ yarn-error.log*
 
 # Vercel
 organisation-frontend/.vercel
+
+# Backend
+backend/.venv/
+**/__pycache__/
+*.pyc
+backend/*.db
+backend/receipts/
+backend/.env
+.pytest_cache/
+
+# Deploy
+deploy/.env
+
+# Browser tests
+organisation-frontend/test-results/
+organisation-frontend/playwright-report/

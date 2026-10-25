@@ -1,0 +1,109 @@
+# TenaCare, the Endod organisation (employer) portal at
+# organisation.endod-health.com: its own Postgres, the API and the web app.
+#
+# The web app joins the shared nginx edge network as "endod-organisation";
+# nginx terminates TLS for organisation.endod-health.com, sets
+# X-Endod-Client-IP and X-Endod-Edge-Key (EDGE_SHARED_SECRET), and proxies to
+# http://endod-organisation:3000; the web app refuses requests without that
+# key. The API is
+# reachable only on this project's own network (and only with the BFF secret).
+# No endod-bus yet: it is needed only for the Endod pharmacy integration.
+#
+#   cd deploy && cp .env.example .env   # then fill it in
+#   docker compose --env-file .env up -d --build
+#   docker compose exec api python -m app.cli create-org --name "Example PLC" --tin 0012345678
+#   docker compose exec api python -m app.cli create-admin --org <id> --email hr@example.et --name "Full Name"
+#
+# Database roles (deploy/postgres-init/10-roles.sh, run when the volume is
+# first created): the one-shot `migrate` service runs Alembic as org_owner;
+# the API connects as org_app, which cannot change the schema and can only
+# read and append to the audit log.
+
+name: endod-organisation
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: organisation
+      # The superuser: only for the init script and emergencies; no app uses it.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      ORG_OWNER_PASSWORD: ${ORG_OWNER_PASSWORD:?set ORG_OWNER_PASSWORD in deploy/.env}
+      ORG_APP_PASSWORD: ${ORG_APP_PASSWORD:?set ORG_APP_PASSWORD in deploy/.env}
+    volumes:
+      - organisation_pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    networks: [default]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d organisation"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Applies the Alembic migrations as the owner role, then exits. `up` runs it
+  # again each time; the API starts only after it succeeded.
+  migrate:
+    build: ../backend
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ORG_ENVIRONMENT: production
+      ORG_DATABASE_URL: ${ORG_MIGRATE_DATABASE_URL:?set ORG_MIGRATE_DATABASE_URL (the org_owner role) in deploy/.env}
+      ORG_APP_ROLE: org_app
+    networks: [default]
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ../backend
+    restart: unless-stopped
+    environment:
+      ORG_ENVIRONMENT: production
+      # The org_app role (not the owner, not the superuser).
+      ORG_DATABASE_URL: ${ORG_DATABASE_URL:?set ORG_DATABASE_URL (the org_app role) in deploy/.env}
+      ORG_RECEIPTS_DIR: /data/receipts
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (at least 32 random characters)}
+      SITE_ORIGIN: ${SITE_ORIGIN:-https://organisation.endod-health.com}
+      # Only the web app knows it: anything else reaching this API is refused,
+      # and only the web app names the visitor.
+      BFF_SHARED_SECRET: ${BFF_SHARED_SECRET:?set BFF_SHARED_SECRET (at least 32 random characters)}
+    volumes:
+      # Receipt photos and scans, under ids: <organisation id>/<file id>.
+      - organisation_receipts:/data/receipts
+    networks: [default]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build: ../organisation-frontend
+    restart: unless-stopped
+    environment:
+      ORG_API_URL: http://api:8000
+      SITE_ORIGIN: ${SITE_ORIGIN:-https://organisation.endod-health.com}
+      BFF_SHARED_SECRET: ${BFF_SHARED_SECRET:?set BFF_SHARED_SECRET (at least 32 random characters)}
+      # nginx sends it as X-Endod-Edge-Key on every request; anything else on
+      # the shared edge network that calls this container directly is refused.
+      EDGE_SHARED_SECRET: ${EDGE_SHARED_SECRET:?set EDGE_SHARED_SECRET (at least 32 random characters)}
+    networks:
+      default: {}
+      shared_edge:
+        aliases: [endod-organisation]
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  organisation_pgdata:
+  organisation_receipts:
+
+networks:
+  default: {}
+  shared_edge:
+    external: true
+    name: ${SHARED_NGINX_NETWORK:-eyita_edge}

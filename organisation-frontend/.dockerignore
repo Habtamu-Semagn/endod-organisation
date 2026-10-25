@@ -1,0 +1,12 @@
+.git
+.github
+.next
+.venv
+node_modules
+e2e
+playwright.config.ts
+playwright-report
+test-results
+*.tsbuildinfo
+.env
+.env.*

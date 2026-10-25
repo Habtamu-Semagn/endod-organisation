@@ -1,8 +1,20 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { initials } from "@/lib/format";
+import type { Me } from "@/lib/types";
+
 type HeaderProps = {
   onMenuClick?: () => void;
+  me: Me | null;
+  onSignOut: () => void;
 };
 
-export default function Header({ onMenuClick }: HeaderProps) {
+export default function Header({ onMenuClick, me, onSignOut }: HeaderProps) {
+  const router = useRouter();
+  const [q, setQ] = useState("");
+
   return (
     <header className="fixed top-0 left-0 lg:left-64 right-0 h-16 bg-surface z-40 flex items-center justify-between px-space-md sm:px-space-xl gap-space-md sm:gap-space-lg">
       <button
@@ -11,44 +23,51 @@ export default function Header({ onMenuClick }: HeaderProps) {
         onClick={onMenuClick}
         type="button"
       >
-        <span className="material-symbols-outlined text-[22px]">menu</span>
+        <span aria-hidden="true" className="material-symbols-outlined text-[22px]">menu</span>
       </button>
-      <div className="flex-1 max-w-xl">
+      <form
+        className="flex-1 max-w-xl"
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const term = q.trim();
+          router.push(term ? `/claims?q=${encodeURIComponent(term)}` : "/claims");
+        }}
+      >
         <div className="relative flex items-center">
-          <span className="material-symbols-outlined absolute left-3 text-outline text-[20px]">
-            search
-          </span>
+          <span aria-hidden="true" className="material-symbols-outlined absolute left-3 text-outline text-[20px]">search</span>
           <input
+            aria-label="Search claims"
             className="w-full h-10 pl-10 pr-4 bg-surface-container-lowest rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary "
-            placeholder="Search claims, employees, pharmacies, invoices..."
+            placeholder="Search claims by employee, pharmacy, receipt or claim number..."
             type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
           />
         </div>
-      </div>
+      </form>
       <div className="flex items-center gap-space-md sm:gap-space-lg">
-        <button
-          aria-label="Notifications"
-          className="relative p-2 rounded-full hover:bg-surface-container-high text-on-surface-variant transition-colors"
-          type="button"
-        >
-          <span className="material-symbols-outlined text-[22px]">notifications</span>
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-error ring-2 ring-surface"></span>
-        </button>
         <div className="h-8 w-px bg-surface-container-high"></div>
         <div className="flex items-center gap-space-sm">
-          <img
-            alt="Profile"
-            className="w-8 h-8 rounded-full object-cover ring-1 ring-primary/20"
-            src="https://lh3.googleusercontent.com/aida-public/AB6AXuD2hHXaiA_gidjqDFb7zu5DvnGrQUCXD3znBHNchOO5ITarjO4h2nhZ4pQJzswvsHmeMw7amI1b7w0ZXSr2edFslCS9004uIz_tfxbYh-DpHqTq6FMuNilK_xUPOkp3rxklX1JzwtFlCyE8UXoSBi0iMfondOHq9yv1KV9Lc7g9aJXDmJ7LgUVDJDkZG-adpLQS68riuJeFkwpfcM4XOhB-uV7RRY-1_vTE5XHbRX7QlwHNQomi21Or"
-          />
+          <div className="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-[12px]">
+            {me ? initials(me.admin.name) : ""}
+          </div>
           <div className="hidden sm:flex flex-col text-left">
-            <span className="font-label-md text-label-md text-on-surface font-semibold">
-              Selamawit Tadesse
+            <span data-testid="signed-in-name" className="font-label-md text-label-md text-on-surface font-semibold">
+              {me?.admin.name ?? ""}
             </span>
-            <span className="font-label-sm text-label-sm text-on-surface-variant">
-              Lead People &amp; Benefits
+            <span data-testid="signed-in-organisation" className="font-label-sm text-label-sm text-on-surface-variant">
+              {me?.organisation.name ?? ""}
             </span>
           </div>
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="ml-space-sm inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant font-label-md text-label-md"
+          >
+            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">logout</span>
+            <span>Sign out</span>
+          </button>
         </div>
       </div>
     </header>
