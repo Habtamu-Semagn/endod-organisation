@@ -29,6 +29,13 @@ def safe_cell(value: Any) -> str:
     return text
 
 
+def unprotect(value: str) -> str:
+    """Undo safe_cell: our own exports can be imported again ("'+2519..." is "+2519...")."""
+    if value.startswith("'") and value[1:].lstrip(" ").startswith(_FORMULA_START):
+        return value[1:]
+    return value
+
+
 def to_csv(header: Sequence[str], rows: Iterable[Sequence[Any]]) -> str:
     """CSV text (UTF-8 with a BOM, so Excel shows Amharic names right; CRLF line ends)."""
     out = io.StringIO()
@@ -54,7 +61,7 @@ def parse(text: str) -> List[Tuple[int, dict]]:
         header = next(reader)
     except StopIteration as exc:
         raise ValueError("The file is empty.") from exc
-    keys = [h.strip().lower().replace(" ", "_") for h in header]
+    keys = [unprotect(h).strip().lower().replace(" ", "_") for h in header]
     rows = []
     for values in reader:
         if not any(v.strip() for v in values):
@@ -62,5 +69,5 @@ def parse(text: str) -> List[Tuple[int, dict]]:
         if len(rows) >= MAX_IMPORT_ROWS:
             raise ValueError(f"At most {MAX_IMPORT_ROWS} rows can be imported at once.")
         rows.append((reader.line_num,
-                     {key: (values[i].strip() if i < len(values) else "") for i, key in enumerate(keys) if key}))
+                     {key: (unprotect(values[i]).strip() if i < len(values) else "") for i, key in enumerate(keys) if key}))
     return rows

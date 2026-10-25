@@ -214,3 +214,12 @@ def test_the_safe_cell_rule():
         assert safe_cell(dangerous).startswith("'"), dangerous
     for fine in ("Abebe", "12.50", "", None, "a=b"):
         assert not safe_cell(fine).startswith("'"), fine
+
+
+def test_an_export_imports_again_unchanged(portal):
+    portal.employee(employee_number="ET-1", name="Abebe Kebede", phone="0911000001", department="-Ops",
+                    payout_method="telebirr", payout_account="0911000001")
+    exported = portal.get("/employees/export").text
+    assert "'+251911000001" in exported and "'-Ops" in exported
+    preview = portal.post("/employees/import/preview", json={"csv": exported}).json()
+    assert preview["summary"] == {"create": 0, "update": 0, "unchanged": 1, "error": 0}
