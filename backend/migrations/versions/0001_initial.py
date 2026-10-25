@@ -150,7 +150,7 @@ def upgrade() -> None:
     sa.Column('admin_id', sa.String(length=32), nullable=False),
     sa.Column('token_hash', sa.String(length=64), nullable=False),
     sa.Column('stage', sa.String(length=16), nullable=False),
-    sa.Column('password_ok', sa.Boolean(), server_default=sa.text('1'), nullable=False),
+    sa.Column('password_ok', sa.Boolean(), server_default=sa.true(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('last_seen_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=False),
