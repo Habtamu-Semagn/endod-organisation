@@ -31,13 +31,13 @@ export default function PaymentsPage() {
     setError(null);
     setSuccess(null);
     try {
-      const batch = await apiFetch<Batch>("batches", { method: "POST", body: { method } });
+      const batch = await runSensitive(() => apiFetch<Batch>("batches", { method: "POST", body: { method } }));
       setSuccess(`${batch.code} is ready: ${batch.claim_count} claims, ${formatEtb(batch.total_santim)}. Download its file and upload it to ${batch.method_label}.`);
       setCreating(null);
       setTab("open");
       reload();
     } catch (e) {
-      setError(messageOf(e, "The batch could not be made."));
+      if (!(e instanceof Cancelled)) setError(messageOf(e, "The batch could not be made."));
     } finally {
       setBusy(false);
     }
@@ -67,11 +67,11 @@ export default function PaymentsPage() {
     setError(null);
     setSuccess(null);
     try {
-      await apiFetch(`batches/${batch.id}/cancel`, { method: "POST" });
+      await runSensitive(() => apiFetch(`batches/${batch.id}/cancel`, { method: "POST" }));
       setSuccess(`${batch.code} is cancelled; its claims are ready to batch again.`);
       reload();
     } catch (e) {
-      setError(messageOf(e, "The batch could not be cancelled."));
+      if (!(e instanceof Cancelled)) setError(messageOf(e, "The batch could not be cancelled."));
     } finally {
       setBusy(false);
     }
@@ -258,6 +258,7 @@ export default function PaymentsPage() {
                       <div className="flex items-center justify-end gap-2">
                         <a
                           href={`/api/export/batches/${batch.id}/export`}
+                          onClick={() => setTimeout(reload, 1500)}
                           className="inline-flex items-center gap-1 px-3 py-1 rounded text-on-surface-variant hover:text-primary font-label-sm text-label-sm transition-colors"
                         >
                           <span aria-hidden="true" className="material-symbols-outlined text-[16px]">sim_card_download</span>
@@ -265,14 +266,17 @@ export default function PaymentsPage() {
                         </a>
                         {batch.status === "open" && (
                           <>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => void cancelBatch(batch)}
-                              className="px-3 py-1 rounded text-error font-label-sm text-label-sm hover:underline"
-                            >
-                              Cancel
-                            </button>
+                            {/* Once its file is downloaded the batch may have been paid: it can only be marked paid. */}
+                            {batch.exported_at ? null : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void cancelBatch(batch)}
+                                className="px-3 py-1 rounded text-error font-label-sm text-label-sm hover:underline"
+                              >
+                                Cancel
+                              </button>
+                            )}
                             <button
                               type="button"
                               disabled={busy}

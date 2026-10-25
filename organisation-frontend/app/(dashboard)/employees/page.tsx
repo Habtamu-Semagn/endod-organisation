@@ -741,6 +741,7 @@ function EmployeeFormDialog({
         }
       : blankForm
   );
+  const { runSensitive } = usePortal();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (key: keyof EmployeeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -751,12 +752,15 @@ function EmployeeFormDialog({
     setError(null);
     const body = { ...form, endod_id: form.endod_id || null, payout_method: form.payout_method || null, payout_account: form.payout_account || null };
     try {
-      const saved = employee
-        ? await apiFetch<Employee>(`employees/${employee.id}`, { method: "PATCH", body })
-        : await apiFetch<Employee>("employees", { method: "POST", body });
+      // Payout details (where reimbursements go) need a fresh code: asked for when the API wants one.
+      const saved = await runSensitive(() =>
+        employee
+          ? apiFetch<Employee>(`employees/${employee.id}`, { method: "PATCH", body })
+          : apiFetch<Employee>("employees", { method: "POST", body })
+      );
       onSaved(saved, !employee);
     } catch (e) {
-      setError(messageOf(e, "The employee could not be saved."));
+      if (!(e instanceof Cancelled)) setError(messageOf(e, "The employee could not be saved."));
       setBusy(false);
     }
   };
@@ -821,6 +825,7 @@ function EmployeeFormDialog({
 // --- CSV import ------------------------------------------------------------------------------------
 
 function ImportDialog({ onClose, onImported }: { onClose: () => void; onImported: (plan: ImportPlan) => void }) {
+  const { runSensitive } = usePortal();
   const [csv, setCsv] = useState("");
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [busy, setBusy] = useState(false);
@@ -853,9 +858,9 @@ function ImportDialog({ onClose, onImported }: { onClose: () => void; onImported
     setBusy(true);
     setError(null);
     try {
-      onImported(await apiFetch<ImportPlan>("employees/import/commit", { method: "POST", body: { csv } }));
+      onImported(await runSensitive(() => apiFetch<ImportPlan>("employees/import/commit", { method: "POST", body: { csv } })));
     } catch (e) {
-      setError(messageOf(e, "Nothing was imported."));
+      if (!(e instanceof Cancelled)) setError(messageOf(e, "Nothing was imported."));
       setBusy(false);
     }
   };

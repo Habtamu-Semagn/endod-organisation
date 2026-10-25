@@ -46,7 +46,10 @@ export default function ClaimDetailClient({ id }: { id: string }) {
   const approve = () =>
     act(
       () => apiFetch<Claim>(`claims/${claim.id}/approve`, { method: 'POST' }),
-      (c) => `${c.code} is approved: ${formatEtb(c.approved_santim)} will be paid back to ${c.employee?.name ?? 'the employee'}.`
+      (c) =>
+        c.approved_santim
+          ? `${c.code} is approved: ${formatEtb(c.approved_santim)} will be paid back to ${c.employee?.name ?? 'the employee'}.`
+          : `${c.code} is approved with nothing to reimburse.`
     );
 
   const reject = async () => {

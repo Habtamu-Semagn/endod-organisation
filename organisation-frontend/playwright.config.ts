@@ -1,6 +1,6 @@
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
-import { API_PORT, API_URL, BFF_SECRET, WEB_ORIGIN, WEB_PORT, apiEnv, backendDir, python } from "./e2e/env";
+import { API_PORT, API_URL, BFF_SECRET, EDGE_HEADERS, EDGE_SECRET, WEB_ORIGIN, WEB_PORT, apiEnv, backendDir, python } from "./e2e/env";
 
 // Browser tests run the real stack: the organisation API (uvicorn, a
 // throwaway SQLite database migrated with Alembic, a temporary receipts
@@ -26,6 +26,8 @@ export default defineConfig({
     trace: "retain-on-failure",
     actionTimeout: 10_000,
     acceptDownloads: true,
+    // As our nginx sends it; e2e/edge.spec.ts checks requests without it are refused.
+    extraHTTPHeaders: EDGE_HEADERS,
   },
   webServer: [
     {
@@ -38,10 +40,10 @@ export default defineConfig({
     },
     {
       command: process.env.E2E_NEXT_DEV ? `npm run dev -- -p ${WEB_PORT}` : `npm run start -- -p ${WEB_PORT}`,
-      url: `${WEB_ORIGIN}/login`,
+      url: `${WEB_ORIGIN}/api/health`,
       reuseExistingServer: false,
       timeout: 180_000,
-      env: { ORG_API_URL: API_URL, SITE_ORIGIN: WEB_ORIGIN, BFF_SHARED_SECRET: BFF_SECRET },
+      env: { ORG_API_URL: API_URL, SITE_ORIGIN: WEB_ORIGIN, BFF_SHARED_SECRET: BFF_SECRET, EDGE_SHARED_SECRET: EDGE_SECRET },
     },
   ],
 });

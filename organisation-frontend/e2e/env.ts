@@ -9,6 +9,9 @@ export const WEB_PORT = 3240;
 export const API_URL = `http://127.0.0.1:${API_PORT}`;
 export const WEB_ORIGIN = `http://localhost:${WEB_PORT}`;
 export const BFF_SECRET = "e2e-bff-secret-0123456789abcdefghijklmnop";
+/** What our nginx adds to every request (the web app refuses anything without it). */
+export const EDGE_SECRET = "e2e-edge-secret-0123456789abcdefghijklmnop";
+export const EDGE_HEADERS = { "X-Endod-Edge-Key": EDGE_SECRET };
 
 export const backendDir = path.join(__dirname, "..", "..", "backend");
 // The backend's Python: E2E_PYTHON (CI), else backend/.venv.

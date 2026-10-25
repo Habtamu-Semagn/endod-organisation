@@ -138,6 +138,7 @@ export type Batch = {
   created_at: string;
   paid_at: string | null;
   reference: string | null;
+  exported_at: string | null;
   claims?: Claim[];
 };
 

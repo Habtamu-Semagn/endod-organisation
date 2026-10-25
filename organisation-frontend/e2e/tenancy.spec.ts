@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { addEmployee, api, enterClaim, signedInAdmin } from "./helpers";
+import { EDGE_HEADERS } from "./env";
 
 test("an admin of another organisation cannot reach this organisation's data", async ({ page, browser }) => {
   // Organisation A: an employee and a claim with its receipt.
@@ -10,7 +11,7 @@ test("an admin of another organisation cannot reach this organisation's data", a
   const claim = await (await api(page, "GET", `claims/${claimId}`)).json();
 
   // Organisation B's admin, in another browser.
-  const other = await browser.newContext();
+  const other = await browser.newContext({ extraHTTPHeaders: EDGE_HEADERS });
   const b = await other.newPage();
   await signedInAdmin(b, "org-b");
 

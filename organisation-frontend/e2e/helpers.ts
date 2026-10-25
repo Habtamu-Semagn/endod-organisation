@@ -167,8 +167,6 @@ export async function addEmployee(page: Page, fields: Record<string, string>) {
     employee_number: `ET-${unique()}`,
     phone: "0911223344",
     department: "Engineering",
-    payout_method: "cbe",
-    payout_account: "1000123456789",
     ...fields,
   });
   expect(response.status(), await response.text()).toBe(201);

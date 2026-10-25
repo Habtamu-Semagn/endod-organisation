@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { signedInAdmin } from "./helpers";
+import { reauthenticate, signedInAdmin } from "./helpers";
 
 test("import employees from CSV: preview with per-row errors, then import", async ({ page }) => {
-  await signedInAdmin(page, "import");
+  const { auth } = await signedInAdmin(page, "import");
   await page.getByRole("link", { name: "Employees" }).click();
   await page.getByRole("button", { name: "Import Employees (CSV)" }).click();
   const dialog = page.getByTestId("import-dialog").filter({ visible: true });
@@ -21,6 +21,8 @@ test("import employees from CSV: preview with per-row errors, then import", asyn
   await dialog.getByRole("button", { name: "Preview" }).click();
   await expect(dialog.getByTestId("import-summary")).toContainText("2 to add");
   await dialog.getByRole("button", { name: "Import 2 employees" }).click();
+  // An import can change payout accounts: a fresh code is asked for.
+  await reauthenticate(page, auth);
   await expect(page.getByTestId("success-banner").filter({ visible: true })).toHaveText(
     "Imported: 2 added, 0 updated, 0 unchanged."
   );

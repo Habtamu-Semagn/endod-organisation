@@ -17,6 +17,8 @@ test("add an employee, enter a claim with its receipt, approve, batch, export an
   await dialog.getByLabel("Payout Method").selectOption("cbe");
   await dialog.getByLabel(/Payout Account/).fill("1000123456789");
   await dialog.getByRole("button", { name: "Add Employee" }).click();
+  // A payout account is where reimbursements go: a fresh code is asked for.
+  await reauthenticate(page, auth);
   await expect(page.getByTestId("success-banner").filter({ visible: true })).toHaveText("Dawit Bekele is added.");
   const row = page.getByTestId("employee-row").filter({ hasText: "Dawit Bekele" });
   await expect(row).toContainText("+251911223344");
@@ -36,9 +38,8 @@ test("add an employee, enter a claim with its receipt, approve, batch, export an
   expect(receipt.headers()["content-disposition"]).toMatch(/^inline; filename="receipt.png"/);
   await expect(page.getByTestId("pending-badge").filter({ visible: true })).toHaveText("1");
 
-  // Approve: a fresh code is asked for.
+  // Approve (the code given for the payout account a moment ago still counts: 10 minutes).
   await page.getByRole("button", { name: /^Approve/ }).click();
-  await reauthenticate(page, auth);
   await expect(page.getByTestId("success-banner").filter({ visible: true })).toContainText("is approved: ETB 501.00 will be paid back to Dawit Bekele");
   await expect(page.getByTestId("claim-status").filter({ visible: true })).toHaveText("Approved");
 
@@ -55,6 +56,8 @@ test("add an employee, enter a claim with its receipt, approve, batch, export an
   expect(download.suggestedFilename()).toBe("BATCH-0001-cbe.csv");
   const csv = fs.readFileSync((await download.path())!, "utf-8");
   expect(csv).toContain("1000123456789,Dawit Bekele,501.00,BATCH-0001/CLM-000001");
+  // Downloaded, the batch may have been paid at the bank: it can no longer be cancelled.
+  await expect(batchRow.getByRole("button", { name: "Cancel" })).toHaveCount(0);
 
   // Mark it paid with the bank's reference (the code given for the approval still counts).
   await batchRow.getByRole("button", { name: "Mark paid" }).click();
