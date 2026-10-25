@@ -127,5 +127,5 @@ jobs:
         working-directory: deploy
         run: |
           cp .env.example .env
-          sed -i 's/^SESSION_SECRET=$/SESSION_SECRET=ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci/; s/^BFF_SHARED_SECRET=$/BFF_SHARED_SECRET=ci-bff-ci-bff-ci-bff-ci-bff-ci-bff-ci/' .env
+          sed -i 's/^SESSION_SECRET=$/SESSION_SECRET=ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci-ci/; s/^BFF_SHARED_SECRET=$/BFF_SHARED_SECRET=ci-bff-ci-bff-ci-bff-ci-bff-ci-bff-ci/; s/^EDGE_SHARED_SECRET=$/EDGE_SHARED_SECRET=ci-edge-ci-edge-ci-edge-ci-edge-ci-edge/' .env
           docker compose --env-file .env config -q

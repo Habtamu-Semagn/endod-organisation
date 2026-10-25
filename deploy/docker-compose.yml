@@ -3,7 +3,9 @@
 #
 # The web app joins the shared nginx edge network as "endod-organisation";
 # nginx terminates TLS for organisation.endod-health.com, sets
-# X-Endod-Client-IP and proxies to http://endod-organisation:3000. The API is
+# X-Endod-Client-IP and X-Endod-Edge-Key (EDGE_SHARED_SECRET), and proxies to
+# http://endod-organisation:3000; the web app refuses requests without that
+# key. The API is
 # reachable only on this project's own network (and only with the BFF secret).
 # No endod-bus yet: it is needed only for the Endod pharmacy integration.
 #
@@ -85,6 +87,9 @@ services:
       ORG_API_URL: http://api:8000
       SITE_ORIGIN: ${SITE_ORIGIN:-https://organisation.endod-health.com}
       BFF_SHARED_SECRET: ${BFF_SHARED_SECRET:?set BFF_SHARED_SECRET (at least 32 random characters)}
+      # nginx sends it as X-Endod-Edge-Key on every request; anything else on
+      # the shared edge network that calls this container directly is refused.
+      EDGE_SHARED_SECRET: ${EDGE_SHARED_SECRET:?set EDGE_SHARED_SECRET (at least 32 random characters)}
     networks:
       default: {}
       shared_edge:

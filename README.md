@@ -42,13 +42,32 @@ The design follows the Endod super admin service (`endod-superadmin`).
   with per-account exponential backoff that never signs anyone out, and a per-address limit.
 - **Sessions** are server-side, in an httpOnly, Secure, SameSite=Strict `__Host-` cookie,
   with a 30-minute idle timeout and a 12-hour absolute limit.
-- **Re-authentication**: approving or rejecting a claim, marking a batch paid, and
-  changing the policy (or an employee's own policy) or the payout settings each need a
-  TOTP code given within the last 10 minutes.
+- **Re-authentication**: approving or rejecting a claim, creating, cancelling or marking
+  paid a payout batch, changing payout accounts, importing employees, and changing the
+  policy (or an employee's own policy) or the payout settings each need a TOTP code given
+  within the last 10 minutes.
 - **BFF**: the browser talks only to the web app; the web app calls the API with
   `X-BFF-Secret` (the API refuses everything except `/health` without it) and passes
   the visitor's address from nginx's `X-Endod-Client-IP` (in production a request
   without it gets 503). Changes must come from this site (Origin, Sec-Fetch-Site, JSON).
+- **Only our nginx reaches the web app**: nginx adds `X-Endod-Edge-Key` (the value of
+  `EDGE_SHARED_SECRET`) to every request; the web app (`proxy.ts`) answers 403 to anything
+  without it, so another container on the shared edge network cannot call it directly and
+  choose `X-Endod-Client-IP`. Only the container's own health check (`/api/health` asked of
+  127.0.0.1) needs no key. In production (an https `SITE_ORIGIN`) a missing or short
+  secret makes every request a 503. nginx: `proxy_set_header X-Endod-Edge-Key "<secret>";`
+  next to `proxy_set_header X-Endod-Client-IP ...;`.
+- **Throttling of codes**: wrong TOTP or recovery codes count per account across all
+  addresses too; from 5 within 15 minutes, code attempts for that account wait 30 s,
+  60 s, ... up to 15 minutes (audited as `account_code_backoff`; nobody is signed out).
+  Per-address limits count an IPv6 address by its /64.
+- **Payout accounts**: adding or changing an employee's payout method or account (by hand or
+  by CSV import), and creating or cancelling a payout batch, need a fresh code. The audit
+  log records each payout change with the old and new accounts masked to their last 4
+  digits. Once a batch's file has been downloaded it can no longer be cancelled (only
+  marked paid), so its claims can never be batched and paid twice; the file uses the
+  accounts recorded when the batch was made. A claim with nothing to reimburse (a 100%
+  co-pay) is approved but never goes into a batch.
 - **Audit log**: every sign-in step and every change (with the organisation, admin, address,
   target and result) goes to `audit_events`, which the API's database role can only read
   and append to.
