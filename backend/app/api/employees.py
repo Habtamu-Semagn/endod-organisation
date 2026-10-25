@@ -21,7 +21,7 @@ from app.api.common import (
     bad, checked, claim_payload, csv_response, dependant_payload, employee_payload, like, today,
 )
 from app.api.settings import PolicyRules, clean_exclusions, rules_payload
-from app.auth import Principal, current_admin, fresh_admin
+from app.auth import Principal, current_admin, fresh_admin, require_fresh
 from app.db import session_scope, utcnow
 from app.errors import ApiError
 from app.models import (
@@ -35,6 +35,29 @@ router = APIRouter(tags=["employees"])
 MAX_PAGE_SIZE = 100
 IMPORT_COLUMNS = ("employee_number", "name", "phone", "department", "endod_id", "payout_method", "payout_account")
 REQUIRED_COLUMNS = ("employee_number", "name", "phone", "department")
+PAYOUT_FIELDS = ("payout_method", "payout_account")
+
+
+def mask(account: Optional[str]) -> Optional[str]:
+    """An account for the audit log: only its last 4 characters."""
+    if not account:
+        return None
+    return "****" + account[-4:]
+
+
+def payout_detail(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    return {"before": {"method": before.get("payout_method"), "account": mask(before.get("payout_account"))},
+            "after": {"method": after.get("payout_method"), "account": mask(after.get("payout_account"))}}
+
+
+def payout_changes(before: Dict[str, Any], after: Dict[str, Any]) -> bool:
+    return any(before.get(k) != after.get(k) for k in PAYOUT_FIELDS)
+
+
+def _audit_payout(session, principal: Principal, employee: Employee, before: Dict[str, Any],
+                  after: Dict[str, Any], via: str) -> None:
+    audit.by(session, principal, audit.EMPLOYEE_PAYOUT_CHANGED, target_type="employee", target_id=employee.id,
+             target_name=employee.name, detail={**payout_detail(before, after), "via": via})
 
 
 class EmployeeIn(BaseModel):
@@ -168,6 +191,9 @@ def list_employees(
 @router.post("/employees", status_code=201)
 def create_employee(body: EmployeeIn, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
     fields = checked(_clean, body.model_dump())
+    if payout_changes({}, fields):
+        # Where reimbursements go: a fresh code, like any payout change.
+        require_fresh(principal)
     org = principal.organisation_id
     try:
         with session_scope() as session:
@@ -177,6 +203,8 @@ def create_employee(body: EmployeeIn, principal: Principal = Depends(current_adm
             session.flush()
             audit.by(session, principal, audit.EMPLOYEE_CREATED, target_type="employee", target_id=employee.id,
                      target_name=employee.name, detail={"employee_number": employee.employee_number})
+            if payout_changes({}, fields):
+                _audit_payout(session, principal, employee, {}, fields, "create")
             return employee_payload(employee, dependants=[], claims_count=0, spend_santim=0,
                                     has_policy_override=False)
     except IntegrityError as exc:  # a simultaneous insert of the same number
@@ -277,8 +305,9 @@ def import_preview(body: ImportIn, principal: Principal = Depends(current_admin)
 
 
 @router.post("/employees/import/commit")
-def import_commit(body: ImportIn, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    """All or nothing: with any error in the file, nothing is imported."""
+def import_commit(body: ImportIn, principal: Principal = Depends(fresh_admin)) -> Dict[str, Any]:
+    """All or nothing: with any error in the file, nothing is imported. Needs a
+    fresh code (an import can change where reimbursements are paid)."""
     org = principal.organisation_id
     failure: Optional[ApiError] = None
     try:
@@ -295,12 +324,19 @@ def import_commit(body: ImportIn, principal: Principal = Depends(current_admin))
                 now = utcnow()
                 for row in plan["rows"]:
                     if row["action"] == "create":
-                        session.add(Employee(organisation_id=org, **row["fields"]))
+                        employee = Employee(organisation_id=org, **row["fields"])
+                        session.add(employee)
+                        session.flush()
+                        if payout_changes({}, row["fields"]):
+                            _audit_payout(session, principal, employee, {}, row["fields"], "import")
                     elif row["action"] == "update":
                         employee = existing[row["employee_number"]]
+                        before = {k: getattr(employee, k) for k in PAYOUT_FIELDS}
                         for key, value in row["fields"].items():
                             setattr(employee, key, value)
                         employee.updated_at = now
+                        if payout_changes(before, row["fields"]):
+                            _audit_payout(session, principal, employee, before, row["fields"], "import")
                 audit.by(session, principal, audit.EMPLOYEES_IMPORTED, target_type="organisation", target_id=org,
                          detail={"summary": plan["summary"]})
                 return _public_plan(plan)
@@ -353,12 +389,17 @@ def update_employee(employee_id: str, body: EmployeePatch,
             fields = checked(_clean, {**current, **changes})
             _unique_or_400(session, org, fields, employee.id)
             changed = {k: v for k, v in fields.items() if getattr(employee, k) != v}
+            if payout_changes(current, fields):
+                # Where reimbursements go: a fresh code (refused before anything changes).
+                require_fresh(principal)
             for key, value in changed.items():
                 setattr(employee, key, value)
             if changed:
                 employee.updated_at = utcnow()
                 audit.by(session, principal, audit.EMPLOYEE_UPDATED, target_type="employee", target_id=employee.id,
                          target_name=employee.name, detail={"fields": sorted(changed)})
+            if payout_changes(current, fields):
+                _audit_payout(session, principal, employee, current, fields, "edit")
             return _detail(session, principal, employee)
     except IntegrityError as exc:
         raise ApiError(409, "That employee number or Endod ID is already in use.", "DUPLICATE_EMPLOYEE") from exc

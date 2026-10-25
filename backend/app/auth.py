@@ -30,6 +30,7 @@ Every failure is committed before the error is raised.
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -56,6 +57,7 @@ INCOMPLETE = "Finish signing in first."
 REAUTH_REQUIRED = "Confirm it is you: enter a code from your authenticator app."
 INVALID_SETUP_LINK = "This setup link is invalid or has expired. Ask for a new one."
 WRONG_PASSWORD = "That password is not correct."
+CODE_WAIT = "Too many wrong codes for this account. Wait a few minutes, then try again."
 
 SUCCESS, FAILURE = AuditResult.SUCCESS, AuditResult.FAILURE
 
@@ -90,7 +92,22 @@ def _normal_email(email: str) -> str:
     return email.strip().lower()
 
 
+def ip_key(ip: str) -> str:
+    """The address the per-address limits count: an IPv4 address, or the /64
+    network of an IPv6 address (one subscriber usually holds a whole /64)."""
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if address.version == 6:
+        if address.ipv4_mapped:
+            return str(address.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{address}/64", strict=False))
+    return str(address)
+
+
 def _ip_blocked(session, ip: str, now: datetime, settings: Settings) -> bool:
+    ip = ip_key(ip)
     since = now - timedelta(minutes=settings.ORG_IP_WINDOW_MINUTES)
     count = session.scalar(select(func.count()).select_from(AuthFailure)
                            .where(AuthFailure.ip == ip, AuthFailure.at > since))
@@ -98,12 +115,14 @@ def _ip_blocked(session, ip: str, now: datetime, settings: Settings) -> bool:
 
 
 def _note_ip_failure(session, ip: str, now: datetime) -> None:
+    ip = ip_key(ip)
     session.add(AuthFailure(ip=ip, at=now))
     # Old rows are of no use; dropped as new ones come in.
     session.execute(delete(AuthFailure).where(AuthFailure.at < now - timedelta(days=1)))
 
 
 def _throttle(session, admin_id: str, ip: str) -> LoginThrottle:
+    ip = ip_key(ip)
     row = session.scalar(select(LoginThrottle).where(LoginThrottle.admin_id == admin_id, LoginThrottle.ip == ip)
                          .with_for_update())
     if row is None:
@@ -113,6 +132,7 @@ def _throttle(session, admin_id: str, ip: str) -> LoginThrottle:
 
 
 def _pair_locked(session, admin_id: str, ip: str, now: datetime) -> bool:
+    ip = ip_key(ip)
     until = session.scalar(select(LoginThrottle.locked_until).where(
         LoginThrottle.admin_id == admin_id, LoginThrottle.ip == ip))
     return until is not None and ensure_aware(until) > now
@@ -168,7 +188,44 @@ def _clear_failures(session, admin: OrgAdmin, ip: str) -> None:
     admin.failed_attempts = 0
     admin.last_failed_at = None
     admin.backoff_until = None
-    session.execute(delete(LoginThrottle).where(LoginThrottle.admin_id == admin.id, LoginThrottle.ip == ip))
+    session.execute(delete(LoginThrottle).where(LoginThrottle.admin_id == admin.id, LoginThrottle.ip == ip_key(ip)))
+
+
+def code_backoff_seconds(failures: int, settings: Settings) -> int:
+    """0 below ORG_CODE_FAILURE_LIMIT failures, then doubling from the base, capped."""
+    if failures < settings.ORG_CODE_FAILURE_LIMIT:
+        return 0
+    exponent = min(failures - settings.ORG_CODE_FAILURE_LIMIT, 20)
+    return min(settings.ORG_CODE_BACKOFF_BASE_SECONDS * 2 ** exponent, settings.ORG_CODE_BACKOFF_MAX_SECONDS)
+
+
+def _code_blocked(admin: OrgAdmin, now: datetime) -> bool:
+    """Code attempts against this account are paused (from any address)."""
+    return admin.code_backoff_until is not None and ensure_aware(admin.code_backoff_until) > now
+
+
+def _record_code_failure(session, admin: OrgAdmin, now: datetime, settings: Settings, ip: str) -> None:
+    """Count a wrong TOTP or recovery code against the account, whatever the
+    address: from ORG_CODE_FAILURE_LIMIT failures within the window, code
+    attempts are refused for a growing while (30 s, 60 s, ... 15 minutes).
+    Sessions are never ended by this."""
+    window = timedelta(minutes=settings.ORG_CODE_WINDOW_MINUTES)
+    if admin.code_last_failed_at is None or ensure_aware(admin.code_last_failed_at) < now - window:
+        admin.code_failures = 0
+    admin.code_failures = (admin.code_failures or 0) + 1
+    admin.code_last_failed_at = now
+    seconds = code_backoff_seconds(admin.code_failures, settings)
+    if seconds:
+        admin.code_backoff_until = now + timedelta(seconds=seconds)
+        audit.record(session, audit.CODE_BACKOFF, SUCCESS, organisation_id=admin.organisation_id,
+                     admin_id=admin.id, admin_email=admin.email, ip=ip,
+                     detail={"seconds": seconds, "failures": admin.code_failures})
+
+
+def _clear_code_failures(admin: OrgAdmin) -> None:
+    admin.code_failures = 0
+    admin.code_last_failed_at = None
+    admin.code_backoff_until = None
 
 
 def revoke_all(session, admin_id: str, now: datetime) -> None:
@@ -387,6 +444,10 @@ def complete_sign_in(principal: Principal, code: Optional[str], recovery_code: O
             audit.record(session, audit.SIGN_IN, FAILURE, organisation_id=admin.organisation_id, admin_id=admin.id, admin_email=admin.email, ip=ip,
                          detail={"step": "totp", "reason": "address_locked_for_account"})
             failure = ApiError(401, LOCKED, "LOCKED")
+        elif _code_blocked(admin, now):
+            audit.record(session, audit.SIGN_IN, FAILURE, organisation_id=admin.organisation_id, admin_id=admin.id,
+                         admin_email=admin.email, ip=ip, detail={"step": "totp", "reason": "account_code_backoff"})
+            failure = ApiError(429, CODE_WAIT, "CODE_BACKOFF")
         else:
             # A stand-in session (wrong password during backoff) never completes,
             # and its code is not even checked (a recovery code stays unused).
@@ -394,6 +455,7 @@ def complete_sign_in(principal: Principal, code: Optional[str], recovery_code: O
             if method is None:
                 _note_ip_failure(session, ip, now)
                 locked = _record_failure(session, admin, now, settings, ip)
+                _record_code_failure(session, admin, now, settings, ip)
                 reason = "invalid_code" if principal.password_ok else "wrong_password_during_backoff"
                 audit.record(session, audit.SIGN_IN, FAILURE, organisation_id=admin.organisation_id, admin_id=admin.id, admin_email=admin.email, ip=ip,
                              detail={"step": "recovery_code" if recovery_code and not code else "totp",
@@ -407,6 +469,7 @@ def complete_sign_in(principal: Principal, code: Optional[str], recovery_code: O
             else:
                 _revoke(session, principal.session_id, now)
                 _clear_failures(session, admin, ip)
+                _clear_code_failures(admin)
                 admin.last_login_at = now
                 opened = _open_session(session, admin, SessionStage.FULL, now, settings, ip, user_agent)
                 remaining = session.scalar(select(func.count()).select_from(RecoveryCode).where(
@@ -453,6 +516,8 @@ def enrolment_confirm(principal: Principal, code: str, user_agent: Optional[str]
         elif _pair_locked(session, admin.id, ip, now):
             _revoke(session, principal.session_id, now)
             failure = ApiError(401, LOCKED, "LOCKED")
+        elif _code_blocked(admin, now):
+            failure = ApiError(429, CODE_WAIT, "CODE_BACKOFF")
         elif not admin.totp_pending_secret:
             failure = ApiError(409, "Start the set-up again: no authenticator is waiting for a code.", "NO_SECRET")
         else:
@@ -461,6 +526,7 @@ def enrolment_confirm(principal: Principal, code: str, user_agent: Optional[str]
             if step is None:
                 _note_ip_failure(session, ip, now)
                 locked = _record_failure(session, admin, now, settings, ip)
+                _record_code_failure(session, admin, now, settings, ip)
                 audit.record(session, audit.ENROLLED, FAILURE, organisation_id=admin.organisation_id, admin_id=admin.id, admin_email=admin.email, ip=ip,
                              detail={"reason": "invalid_code"})
                 audited = True
@@ -476,6 +542,7 @@ def enrolment_confirm(principal: Principal, code: str, user_agent: Optional[str]
                 admin.totp_enrolled_at = now
                 admin.last_login_at = now
                 _clear_failures(session, admin, ip)
+                _clear_code_failures(admin)
                 codes = _replace_recovery_codes(session, admin.id, now)
                 _revoke(session, principal.session_id, now)
                 opened = _open_session(session, admin, SessionStage.FULL, now, settings, ip, user_agent)
@@ -484,7 +551,7 @@ def enrolment_confirm(principal: Principal, code: str, user_agent: Optional[str]
                 audit.record(session, audit.SIGN_IN, SUCCESS, organisation_id=admin.organisation_id, admin_id=admin.id, admin_email=admin.email, ip=ip,
                              detail={"method": "enrolment"})
                 return opened, codes
-        if failure.code in ("RATE_LIMITED", "LOCKED") and not audited:
+        if failure.code in ("RATE_LIMITED", "LOCKED", "CODE_BACKOFF") and not audited:
             audit.record(session, audit.ENROLLED, FAILURE, organisation_id=admin.organisation_id, admin_id=admin.id, admin_email=admin.email, ip=ip,
                          detail={"reason": failure.code.lower()})
     raise failure
@@ -513,16 +580,20 @@ def reauthenticate(principal: Principal, code: str) -> datetime:
             reason = "address_rate_limited"
         elif not admin.totp_secret:
             failure, reason = ApiError(409, "No authenticator is set up.", "NO_SECRET"), "no_secret"
+        elif _code_blocked(admin, now):
+            failure, reason = ApiError(429, CODE_WAIT, "CODE_BACKOFF"), "account_code_backoff"
         else:
             step = totp.verify(security.unseal(admin.totp_secret), code, admin.totp_last_step)
             if step is not None:
                 admin.totp_last_step = step
                 session.execute(update(AdminSession).where(AdminSession.id == principal.session_id)
                                 .values(reauth_at=now))
+                _clear_code_failures(admin)
                 audit.record(session, audit.REAUTH, SUCCESS, organisation_id=admin.organisation_id, admin_id=admin.id, admin_email=admin.email, ip=ip)
                 return now + timedelta(minutes=settings.ORG_REAUTH_MINUTES)
             _note_ip_failure(session, ip, now)
             locked = _record_failure(session, admin, now, settings, ip)
+            _record_code_failure(session, admin, now, settings, ip)
             if locked:
                 # Whoever is guessing with this session loses it (only this one).
                 _revoke(session, principal.session_id, now)
@@ -638,10 +709,12 @@ def setup_complete(token: str, password: str, ip: str, user_agent: Optional[str]
                         admin.totp_secret = admin.totp_pending_secret = None
                         admin.totp_last_step = admin.totp_enrolled_at = None
                         _clear_failures(session, admin, ip)
+                        _clear_code_failures(admin)
                         session.execute(delete(RecoveryCode).where(RecoveryCode.admin_id == admin.id))
                         revoke_all(session, admin.id, now)
                         opened = _open_session(session, admin, SessionStage.ENROLL, now, settings, ip, user_agent)
-                        audit.record(session, audit.SETUP_COMPLETED, SUCCESS, admin_id=admin.id,
+                        audit.record(session, audit.SETUP_COMPLETED, SUCCESS, organisation_id=admin.organisation_id,
+                                     admin_id=admin.id,
                                      admin_email=admin.email, ip=ip, detail={"mode": mode})
                         return opened
     raise failure

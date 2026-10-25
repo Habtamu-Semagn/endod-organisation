@@ -318,6 +318,7 @@ def test_an_approved_claim_cannot_be_rejected_or_approved_again(portal):
 
 def test_reject_needs_a_fresh_code(portal):
     claim = portal.claim(portal.employee()["id"])
+    portal.forget_reauth()
     resp = portal.post(f"/claims/{claim['id']}/reject", json={"reason": "No stamp."})
     assert resp.status_code == 403 and resp.json()["error_code"] == "REAUTH_REQUIRED"
 

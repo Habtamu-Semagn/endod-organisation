@@ -125,6 +125,7 @@ def test_detail_shows_usage_and_recent_claims(portal):
 def test_employee_policy_overrides_need_a_fresh_code(portal):
     emp = portal.employee()
     rules = {"annual_limit_santim": 1, "copay_percent": 0, "dependants_covered": True, "excluded_medicines": []}
+    portal.forget_reauth()
     assert portal.put(f"/employees/{emp['id']}/policy", json=rules).status_code == 403
     assert portal.delete(f"/employees/{emp['id']}/policy").status_code == 403
 
@@ -157,6 +158,7 @@ def test_import_preview_reports_every_row(portal):
 
 
 def test_import_commit_is_all_or_nothing(portal):
+    portal.reauth()
     bad = HEADER + "ET-1,Good Row,0911000001,Ops,,,\nET-2,Bad Row,nope,Ops,,,\n"
     resp = portal.post("/employees/import/commit", json={"csv": bad})
     assert resp.status_code == 422 and resp.json()["error_code"] == "IMPORT_INVALID"
@@ -182,6 +184,7 @@ def test_import_refuses_unusable_files(portal, text, message):
 
 
 def test_import_accepts_excel_style_files(portal):
+    portal.reauth()
     text = "\ufeffEmployee Number,Name,Phone,Department\r\nET-7,Ayana Bekele,0911000007,Ops\r\n"
     resp = portal.post("/employees/import/commit", json={"csv": text})
     assert resp.status_code == 200 and resp.json()["summary"]["create"] == 1

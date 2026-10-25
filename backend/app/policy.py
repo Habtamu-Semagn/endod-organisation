@@ -216,6 +216,10 @@ def assess(session, claim: Claim, today: date) -> Assessment:
         problems.append(("LIMIT_REACHED",
                          f"The annual limit of {money.format_etb(rules.annual_limit_santim, True)} is used up "
                          f"for this policy year; nothing is left to pay back."))
+    elif payable == 0:
+        result.notes.append(
+            f"Nothing is reimbursed: the employee's co-pay of {money.format_etb(copay, True)} covers the whole "
+            f"receipt. Approving records the claim; it never goes into a payout batch.")
     elif result.capped:
         result.notes.append(
             f"The organisation's share of {money.format_etb(share, True)} is capped at the remaining annual "

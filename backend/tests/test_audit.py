@@ -29,7 +29,8 @@ def test_a_claims_life_is_audited(portal):
     logged = [(a, r) for a, r, *_ in events() if a not in ("sign_in", "sign_in_password", "reauth",
                                                           "organisation_created")]
     assert logged == [
-        ("policy_updated", "success"), ("employee_created", "success"), ("receipt_uploaded", "success"),
+        ("policy_updated", "success"), ("employee_created", "success"), ("employee_payout_changed", "success"),
+        ("receipt_uploaded", "success"),
         ("claim_created", "success"), ("claim_approved", "success"), ("claim_approved", "failure"),
         ("receipt_uploaded", "success"), ("claim_created", "success"), ("claim_rejected", "success"),
         ("batch_created", "success"), ("batch_exported", "success"), ("batch_paid", "success"),
@@ -72,7 +73,7 @@ def test_employee_changes_are_audited(portal):
     portal.post("/employees/import/commit", json={"csv": "employee_number,name,phone,department\nX-1,Abebe Kebede,"
                                                          "0911000099,Ops\n"})
     actions = [a for a, *_ in events() if a.startswith(("employee", "dependant"))]
-    assert actions == ["employee_created", "employee_updated", "employee_deactivated", "employee_activated",
+    assert actions == ["employee_created", "employee_payout_changed", "employee_updated", "employee_deactivated", "employee_activated",
                        "dependant_added", "dependant_removed", "employees_imported"]
     updated = events("employee_updated")[0]
     assert json.loads(updated[4]) == {"fields": ["department"]}

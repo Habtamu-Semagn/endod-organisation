@@ -105,5 +105,5 @@ def batch_payload(b: PaymentBatch) -> Dict[str, Any]:
         "id": b.id, "code": batch_code(b.number), "number": b.number, "method": b.method,
         "method_label": PayoutMethod.LABELS.get(b.method, b.method), "status": b.status,
         "total_santim": b.total_santim, "claim_count": b.claim_count, "created_at": iso(b.created_at),
-        "paid_at": iso(b.paid_at), "reference": b.reference,
+        "paid_at": iso(b.paid_at), "reference": b.reference, "exported_at": iso(b.exported_at),
     }

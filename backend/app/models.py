@@ -130,6 +130,11 @@ class OrgAdmin(Base):
     last_failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     #: Until then, the password step never says whether a password is right.
     backoff_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Wrong TOTP / recovery codes against this account from any address
+    #: (the account-wide code limit in app.auth), and until when code attempts wait.
+    code_failures: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    code_last_failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    code_backoff_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -352,6 +357,10 @@ class PaymentBatch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     paid_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    #: When the payout file was first downloaded, and by whom: from then on the
+    #: batch may have been paid at the bank, so it can no longer be cancelled.
+    exported_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    exported_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     reference: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
 
     __table_args__ = (

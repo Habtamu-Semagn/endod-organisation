@@ -58,16 +58,25 @@ def parse(text: str) -> List[Tuple[int, dict]]:
         raise ValueError("The file is empty.")
     reader = csv.reader(io.StringIO(text))
     try:
-        header = next(reader)
-    except StopIteration as exc:
-        raise ValueError("The file is empty.") from exc
-    keys = [unprotect(h).strip().lower().replace(" ", "_") for h in header]
-    rows = []
-    for values in reader:
-        if not any(v.strip() for v in values):
-            continue
-        if len(rows) >= MAX_IMPORT_ROWS:
-            raise ValueError(f"At most {MAX_IMPORT_ROWS} rows can be imported at once.")
-        rows.append((reader.line_num,
-                     {key: (unprotect(values[i]).strip() if i < len(values) else "") for i, key in enumerate(keys) if key}))
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError("The file is empty.") from exc
+        keys = [unprotect(h).strip().lower().replace(" ", "_") for h in header]
+        seen = set()
+        for key in keys:
+            if key and key in seen:
+                raise ValueError(f"The column {key} appears more than once in the header.")
+            seen.add(key)
+        rows = []
+        for values in reader:
+            if not any(v.strip() for v in values):
+                continue
+            if len(rows) >= MAX_IMPORT_ROWS:
+                raise ValueError(f"At most {MAX_IMPORT_ROWS} rows can be imported at once.")
+            rows.append((reader.line_num,
+                         {key: (unprotect(values[i]).strip() if i < len(values) else "")
+                          for i, key in enumerate(keys) if key}))
+    except csv.Error as exc:
+        raise ValueError(f"This is not a valid CSV file (line {reader.line_num}): {exc}.") from exc
     return rows

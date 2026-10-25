@@ -60,7 +60,14 @@ class Settings(BaseSettings):
     ORG_BACKOFF_BASE_SECONDS: int = 30
     ORG_BACKOFF_MAX_SECONDS: int = 900
     ORG_BACKOFF_WINDOW_MINUTES: int = 60
-    #: Failed sign-in steps from one address within the window before it is refused (429).
+    #: Wrong TOTP or recovery codes against one account, from any address,
+    #: within the window: from the limit on, code attempts for that account
+    #: are refused for base * 2^(n - limit) seconds, at most max.
+    ORG_CODE_FAILURE_LIMIT: int = 5
+    ORG_CODE_WINDOW_MINUTES: int = 15
+    ORG_CODE_BACKOFF_BASE_SECONDS: int = 30
+    ORG_CODE_BACKOFF_MAX_SECONDS: int = 900
+    #: Failed sign-in steps from one address (an IPv6 /64) within the window before it is refused (429).
     ORG_IP_FAILURE_LIMIT: int = 20
     ORG_IP_WINDOW_MINUTES: int = 15
 

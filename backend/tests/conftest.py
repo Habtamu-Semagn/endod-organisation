@@ -219,11 +219,24 @@ class Portal:
     def reauth(self):
         reauth(self.client, self.clock, self.secret, self.headers)
 
+    def forget_reauth(self):
+        """As if the last fresh code were older than 10 minutes."""
+        from sqlalchemy import update
+
+        from app.db import session_scope
+        from app.models import AdminSession
+
+        with session_scope() as session:
+            session.execute(update(AdminSession).values(reauth_at=None))
+
     def employee(self, **fields):
         n = next(self._numbers)
         body = {"employee_number": f"ET-{n:04d}", "name": f"Employee {n}", "phone": f"+25191100{n:04d}",
                 "department": "Engineering", "payout_method": "cbe", "payout_account": f"10000{n:08d}", **fields}
         resp = self.post("/employees", json=body)
+        if resp.status_code == 403 and resp.json()["error_code"] == "REAUTH_REQUIRED":  # payout details
+            self.reauth()
+            resp = self.post("/employees", json=body)
         assert resp.status_code == 201, resp.text
         return resp.json()
 

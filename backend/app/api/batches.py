@@ -52,7 +52,9 @@ def _ready(session, org: str):
     return session.execute(
         select(Claim, Employee).join(Employee, Employee.id == Claim.employee_id)
         .where(Claim.organisation_id == org, Employee.organisation_id == org,
-               Claim.status == ClaimStatus.APPROVED, Claim.batch_id.is_(None))
+               Claim.status == ClaimStatus.APPROVED, Claim.batch_id.is_(None),
+               # Nothing to pay back (e.g. a 100% co-pay): never batched.
+               Claim.approved_santim > 0)
         .order_by(Claim.reviewed_at, Claim.number)).all()
 
 
@@ -95,7 +97,7 @@ def list_batches(status: Optional[str] = Query(default=None, max_length=16),
 
 
 @router.post("/batches", status_code=201)
-def create_batch(body: BatchIn, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
+def create_batch(body: BatchIn, principal: Principal = Depends(fresh_admin)) -> Dict[str, Any]:
     org = principal.organisation_id
     method = body.method.strip().lower()
     failure: Optional[ApiError] = None
@@ -163,9 +165,11 @@ def get_batch(batch_id: str, principal: Principal = Depends(current_admin)) -> D
 def _payout_file(session, batch: PaymentBatch) -> str:
     """The upload file for the batch's method. Banks: one credit per employee
     account; Telebirr: one transfer per wallet (MSISDN without the +).
-    Amounts are plain birr with two decimals ("1234.50")."""
+    Amounts are plain birr with two decimals ("1234.50"). Accounts are the
+    ones recorded on each claim when it was batched, never the employee's
+    current one; a line is never written for nothing."""
     organisation = session.get(Organisation, batch.organisation_id)
-    rows = _batch_rows(session, batch)
+    rows = [(c, e) for c, e in _batch_rows(session, batch) if (c.approved_santim or 0) > 0 and c.payout_account]
     code = batch_code(batch.number)
     if batch.method == PayoutMethod.TELEBIRR:
         header = ("msisdn", "beneficiary_name", "amount_etb", "reference", "remark")
@@ -183,10 +187,16 @@ def _payout_file(session, batch: PaymentBatch) -> str:
 @router.get("/batches/{batch_id}/export")
 def export_batch(batch_id: str, principal: Principal = Depends(current_admin)):
     with session_scope() as session:
-        batch = owned(session, PaymentBatch, batch_id, principal.organisation_id)
+        batch = owned(session, PaymentBatch, batch_id, principal.organisation_id, lock=True)
         text = _payout_file(session, batch)
+        first = batch.exported_at is None
+        if first:
+            # From now on the batch may be paid at the bank: it can no longer be cancelled.
+            batch.exported_at = utcnow()
+            batch.exported_by = principal.admin_id
         audit.by(session, principal, audit.BATCH_EXPORTED, target_type="batch", target_id=batch.id,
-                 target_name=batch_code(batch.number), detail={"method": batch.method, "status": batch.status})
+                 target_name=batch_code(batch.number),
+                 detail={"method": batch.method, "status": batch.status, "first_export": first})
         name = f"{batch_code(batch.number)}-{batch.method}.csv"
     return csv_response(text, name)
 
@@ -217,9 +227,15 @@ def mark_paid(batch_id: str, body: PaidIn, principal: Principal = Depends(fresh_
     raise failure
 
 
+EXPORTED_IS_FINAL = ("This batch's payout file was already downloaded, so it may have been paid: mark it paid, "
+                     "or contact Endod support.")
+
+
 @router.post("/batches/{batch_id}/cancel")
-def cancel_batch(batch_id: str, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    """An open batch is taken apart (its claims are ready to batch again); a paid one never is."""
+def cancel_batch(batch_id: str, principal: Principal = Depends(fresh_admin)) -> Dict[str, Any]:
+    """An open batch whose file was never downloaded is taken apart (its claims
+    are ready to batch again). A downloaded or paid one never is: its claims
+    could otherwise be paid twice."""
     failure: Optional[ApiError] = None
     with session_scope() as session:
         batch = owned(session, PaymentBatch, batch_id, principal.organisation_id, lock=True)
@@ -227,6 +243,10 @@ def cancel_batch(batch_id: str, principal: Principal = Depends(current_admin)) -
             failure = ApiError(409, PAID_IS_FINAL, "BATCH_PAID")
             audit.by(session, principal, audit.BATCH_CANCELLED, AuditResult.FAILURE, target_type="batch",
                      target_id=batch.id, target_name=batch_code(batch.number), detail={"reason": "already_paid"})
+        elif batch.exported_at is not None:
+            failure = ApiError(409, EXPORTED_IS_FINAL, "BATCH_EXPORTED")
+            audit.by(session, principal, audit.BATCH_CANCELLED, AuditResult.FAILURE, target_type="batch",
+                     target_id=batch.id, target_name=batch_code(batch.number), detail={"reason": "already_exported"})
         else:
             for claim, _ in _batch_rows(session, batch):
                 claim.batch_id = None
