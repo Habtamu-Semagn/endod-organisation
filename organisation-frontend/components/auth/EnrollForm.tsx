@@ -24,6 +24,8 @@ export default function EnrollForm() {
   const [fatal, setFatal] = useState<string | null>(null);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [saved, setSaved] = useState(false);
+  // A company's applicant goes on with the application, not the portal.
+  const [applying, setApplying] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -32,6 +34,7 @@ export default function EnrollForm() {
         const me = await apiFetch<Me>("auth/me", { redirectOn401: false });
         if (me.stage === "full") return router.replace("/");
         if (me.stage === "totp") return router.replace("/login");
+        setApplying(Boolean(me.organisation.application_status && me.organisation.application_status !== "approved"));
         const value = await apiFetch<Start>("auth/enroll/start", { method: "POST", redirectOn401: false });
         if (!alive) return;
         setStart(value);
@@ -123,8 +126,13 @@ export default function EnrollForm() {
           <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
           I have saved my recovery codes
         </label>
-        <button type="button" disabled={!saved} onClick={() => router.replace("/")} className={`${primaryButton} mt-4`}>
-          Continue to the portal
+        <button
+          type="button"
+          disabled={!saved}
+          onClick={() => router.replace(applying ? "/apply" : "/")}
+          className={`${primaryButton} mt-4`}
+        >
+          {applying ? "Continue to your application" : "Continue to the portal"}
         </button>
       </AuthCard>
     );
@@ -133,7 +141,11 @@ export default function EnrollForm() {
   return (
     <AuthCard
       title="Set up two-step verification"
-      subtitle="Scan this QR code with Google Authenticator (or any authenticator app), then enter the 6-digit code it shows."
+      subtitle={
+        applying
+          ? "Before your application continues, secure your account: scan this QR code with Google Authenticator (or any authenticator app), then enter the 6-digit code it shows."
+          : "Scan this QR code with Google Authenticator (or any authenticator app), then enter the 6-digit code it shows."
+      }
     >
       {!start ? (
         <p className="text-xs text-on-surface-variant">Preparing…</p>

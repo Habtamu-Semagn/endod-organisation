@@ -48,6 +48,8 @@ async function parse(response: Response, redirectOn401: boolean | undefined): Pr
     const { message, code } = messageOf(parsed, response.status);
     const sessionGone = response.status === 401 || (response.status === 403 && code === "SESSION_INCOMPLETE");
     if (sessionGone && redirectOn401 !== false) goToLogin();
+    // The organisation is still applying: only its application is open to it.
+    if (response.status === 403 && code === "APPLICATION_NOT_APPROVED" && redirectOn401 !== false) hardNavigate("/apply");
     throw new ApiError(message, response.status, code);
   }
   return parsed;
@@ -107,6 +109,25 @@ export async function uploadReceipt(file: File): Promise<UploadedReceipt> {
     throw new ApiError("Cannot reach TenaCare. Check your connection.", 0, "NETWORK");
   }
   return (await parse(response, true)) as UploadedReceipt;
+}
+
+/** Sends an application document (the API checks its content and size). */
+export async function uploadApplicationDocument(kind: string, file: File): Promise<unknown> {
+  if (file.size > MAX_RECEIPT_BYTES) throw new ApiError("A document can be at most 10 MB.", 413, "FILE_TOO_LARGE");
+  const type = RECEIPT_TYPES.includes(file.type) ? file.type : "application/octet-stream";
+  let response: Response;
+  try {
+    response = await fetch(`/api/application/documents/${encodeURIComponent(kind)}`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": type, "X-Filename": encodeURIComponent(file.name) },
+      body: file,
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError("Cannot reach TenaCare. Check your connection.", 0, "NETWORK");
+  }
+  return parse(response, true);
 }
 
 /** A `next` path from the query string, only if it is one of this site's pages. */

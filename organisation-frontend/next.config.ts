@@ -31,8 +31,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: securityHeaders },
       {
-        // Pages and JSON (receipt files set their own policy).
-        source: "/((?!api/receipts/).*)",
+        // Pages and JSON (receipt and application files set their own policy).
+        source: "/((?!api/receipts/|api/application/documents/).*)",
         headers: [
           {
             key: "Content-Security-Policy",

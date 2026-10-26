@@ -171,6 +171,12 @@ export default function LoginForm() {
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
+      <div className="mt-space-lg border-t border-surface-container-high pt-space-md text-center">
+        <p className="font-body-sm text-body-sm text-on-surface-variant">New to TenaCare?</p>
+        <a href="/apply" data-testid="apply-link" className={`${linkButton} mt-1 inline-block`}>
+          Apply as a company
+        </a>
+      </div>
     </AuthCard>
   );
 }

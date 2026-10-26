@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { sessionCookieName } from "@/lib/session-cookie";
 
-// Pages open without a session: the sign-in steps and the setup link.
-const PUBLIC_PAGES = new Set(["/login", "/setup", "/enroll"]);
+// Pages open without a session: the sign-in steps, the setup link and a
+// company's application (whose first step creates the account).
+const PUBLIC_PAGES = new Set(["/login", "/setup", "/enroll", "/apply"]);
 
 /**
  * Only our nginx may talk to this app. Other containers on the shared edge
