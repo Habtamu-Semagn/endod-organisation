@@ -6,8 +6,12 @@
 # X-Endod-Client-IP and X-Endod-Edge-Key (EDGE_SHARED_SECRET), and proxies to
 # http://endod-organisation:3000; the web app refuses requests without that
 # key. The API is
-# reachable only on this project's own network (and only with the BFF secret).
-# No endod-bus yet: it is needed only for the Endod pharmacy integration.
+# reachable on this project's own network (only with the BFF secret) and on
+# the external endod-bus network as "endod-organisation-api", where Endod's
+# super admin calls its /platform routes (company applications) with
+# X-Platform-Key = ORG_PLATFORM_KEY (docs/company-onboarding.md). Every other
+# route still needs the BFF secret, so nothing else on endod-bus can use them.
+#   docker network create endod-bus   # once per host, if it does not exist yet
 #
 #   cd deploy && cp .env.example .env   # then fill it in
 #   docker compose --env-file .env up -d --build
@@ -72,10 +76,18 @@ services:
       # Only the web app knows it: anything else reaching this API is refused,
       # and only the web app names the visitor.
       BFF_SHARED_SECRET: ${BFF_SHARED_SECRET:?set BFF_SHARED_SECRET (at least 32 random characters)}
+      # Endod's super admin sends it as X-Platform-Key to /platform/* over
+      # endod-bus (its ORGANISATION_PLATFORM_KEY). Empty: the platform API answers 503.
+      ORG_PLATFORM_KEY: ${ORG_PLATFORM_KEY:-}
     volumes:
-      # Receipt photos and scans, under ids: <organisation id>/<file id>.
+      # Receipt photos and scans, and companies' application documents, under
+      # ids: <organisation id>/<file id>.
       - organisation_receipts:/data/receipts
-    networks: [default]
+    networks:
+      # Its own network first: Postgres and the web app.
+      default: {}
+      endod_bus:
+        aliases: [endod-organisation-api]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -107,3 +119,6 @@ networks:
   shared_edge:
     external: true
     name: ${SHARED_NGINX_NETWORK:-eyita_edge}
+  endod_bus:
+    external: true
+    name: endod-bus
