@@ -54,7 +54,7 @@ async function readState(): Promise<State | null> {
   try {
     const application = await apiFetch<Application>("application", { redirectOn401: false });
     const fixing = new URLSearchParams(window.location.search).get("fix") === "1";
-    if (application.status === "submitted" || (application.status === "rejected" && !fixing)) {
+    if (application.status === "submitted" || application.status === "closed" || (application.status === "rejected" && !fixing)) {
       hardNavigate("/under-review");
       return null;
     }

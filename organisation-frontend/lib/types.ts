@@ -2,7 +2,7 @@
 
 export type Stage = "totp" | "enroll" | "full";
 
-export type ApplicationStatus = "draft" | "submitted" | "approved" | "rejected";
+export type ApplicationStatus = "draft" | "submitted" | "approved" | "rejected" | "closed";
 
 export type Me = {
   stage: Stage;

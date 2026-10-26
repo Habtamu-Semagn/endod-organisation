@@ -76,6 +76,24 @@ export default function UnderReview() {
   }
 
   const rejected = application.status === "rejected";
+  if (application.status === "closed") {
+    // Final: nothing to edit or resubmit, only sign-out.
+    return (
+      <ApplyFrame title="Application closed" subtitle={application.organisation_name} footer={footer}>
+        <div data-testid="under-review" data-status="closed" className="space-y-space-md">
+          <p className="font-body-md text-body-md text-on-surface font-semibold">This application was closed.</p>
+          {application.rejection_reason && (
+            <p data-testid="closed-reason" className="rounded-xl bg-surface-container-low p-space-md font-body-sm text-body-sm text-on-surface-variant">
+              {application.rejection_reason}
+            </p>
+          )}
+          <button type="button" onClick={() => void signOut()} className={primaryButton}>
+            Sign out
+          </button>
+        </div>
+      </ApplyFrame>
+    );
+  }
   return (
     <ApplyFrame
       title={rejected ? "Changes needed" : "Under review"}

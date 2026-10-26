@@ -129,7 +129,10 @@ test("a company applies, enrols, is reviewed by Endod and then gets the portal",
   await expect(page.getByTestId("under-review")).toHaveAttribute("data-status", "submitted");
 
   // Endod approves it: the dashboard opens.
-  await platform(page, `applications/${id}/approve`, { reviewer: REVIEWER });
+  // The reviewer approves the version they looked at.
+  const detail = await platform(page, `applications/${id}`);
+  expect(detail).toMatchObject({ status: "submitted", duplicate_tin: false, email_verified: false });
+  await platform(page, `applications/${id}/approve`, { reviewer: REVIEWER, expected_updated_at: detail.updated_at });
   await page.reload();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Medication Benefit Overview" })).toBeVisible();
