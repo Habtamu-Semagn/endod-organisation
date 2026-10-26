@@ -53,6 +53,8 @@ export default function PortalShell({ children }: { children: ReactNode }) {
       .then((value) => {
         if (!alive) return;
         if (value.stage !== "full") goToLogin();
+        // A company still applying sees only its application (the API refuses the rest).
+        else if (value.organisation.application_status && value.organisation.application_status !== "approved") hardNavigate("/apply");
         else setMe(value);
       })
       .catch((error: unknown) => {

@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     ORG_IP_FAILURE_LIMIT: int = 20
     ORG_IP_WINDOW_MINUTES: int = 15
 
+    #: Company applications started from one address (an IPv6 /64) within the window (429 after).
+    ORG_APPLICATIONS_PER_IP: int = 5
+    ORG_APPLICATION_WINDOW_MINUTES: int = 60
+
+    #: Endod's super admin sends it as X-Platform-Key to /platform/* (the
+    #: application review API, docs/company-onboarding.md). Unset (or shorter
+    #: than 32 characters): every /platform route answers 503.
+    ORG_PLATFORM_KEY: Optional[str] = None
+
     @field_validator("ORG_ENVIRONMENT", mode="before")
     @classmethod
     def _lower(cls, value):
@@ -100,6 +109,12 @@ class Settings(BaseSettings):
         if self.is_production or secret:
             raise RuntimeError("BFF_SHARED_SECRET must be set to at least 32 random characters.")
         return DEV_BFF_SECRET
+
+
+    def platform_key(self) -> Optional[str]:
+        """The platform API's key, or None when the API is switched off."""
+        key = self.ORG_PLATFORM_KEY or ""
+        return key if len(key) >= 32 else None
 
 
 def get_settings() -> Settings:

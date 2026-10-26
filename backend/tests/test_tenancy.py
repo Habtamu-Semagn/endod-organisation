@@ -48,6 +48,10 @@ def _routes_with_ids():
 
     found = []
     for template, operations in create_app().openapi()["paths"].items():
+        # The application's own documents take the organisation from the session
+        # (tests/test_application.py); the platform API is Endod's, across organisations.
+        if template.startswith(("/application/", "/platform/")):
+            continue
         if "{" in template:
             for method in operations:
                 found.append((method.upper(), template))

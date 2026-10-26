@@ -4,6 +4,9 @@ one-time setup link; server-side sessions; throttling; re-authentication.
 Every admin belongs to exactly one organisation; the session carries its id
 (Principal.organisation_id) and every query of the portal API filters on it.
 A suspended organisation's admins cannot sign in, and their sessions end.
+An organisation whose application (app.onboarding) is not approved is
+*locked*: its admins reach only the application, the sign-in steps and
+sign-out; every other route answers 403 (``current_admin``).
 
 A sign-in goes through stages (app.models.SessionStage). The password opens a
 short *pending* session (stage ``totp``); the code revokes it and opens a new
@@ -43,8 +46,8 @@ from app.config import Settings, get_settings
 from app.db import ensure_aware, iso, session_scope, utcnow
 from app.errors import ApiError
 from app.models import (
-    AdminSession, AuditResult, AuthFailure, LoginThrottle, OrgAdmin, Organisation, OrgStatus, RecoveryCode,
-    SessionStage, SetupToken,
+    AdminSession, ApplicationStatus, AuditResult, AuthFailure, LoginThrottle, OrgAdmin, Organisation,
+    OrganisationApplication, OrgStatus, RecoveryCode, SessionStage, SetupToken,
 )
 
 INVALID_LOGIN = "Incorrect email or password."
@@ -58,6 +61,7 @@ REAUTH_REQUIRED = "Confirm it is you: enter a code from your authenticator app."
 INVALID_SETUP_LINK = "This setup link is invalid or has expired. Ask for a new one."
 WRONG_PASSWORD = "That password is not correct."
 CODE_WAIT = "Too many wrong codes for this account. Wait a few minutes, then try again."
+NOT_APPROVED = "Your organisation's application is not approved yet."
 
 SUCCESS, FAILURE = AuditResult.SUCCESS, AuditResult.FAILURE
 
@@ -77,6 +81,13 @@ class Principal:
     organisation_id: str
     organisation_name: str
     password_ok: bool = True
+    #: The organisation's application (app.models.ApplicationStatus); "approved" without one.
+    application_status: str = ApplicationStatus.APPROVED
+
+    @property
+    def locked(self) -> bool:
+        """Only the application, sign-in steps and sign-out until Endod approves it."""
+        return self.application_status != ApplicationStatus.APPROVED
 
 
 @dataclass(frozen=True)
@@ -121,6 +132,33 @@ def _note_ip_failure(session, ip: str, now: datetime) -> None:
     session.execute(delete(AuthFailure).where(AuthFailure.at < now - timedelta(days=1)))
 
 
+#: The per-address counter of company applications shares the sign-in
+#: failures' table under its own key (``apply:<address>``), which the
+#: sign-in limit never counts.
+_APPLY_PREFIX = "apply:"
+
+
+def application_limited(session, ip: str, now: datetime, settings: Settings) -> bool:
+    """Too many applications started from this address (or its IPv6 /64) lately."""
+    key = _APPLY_PREFIX + ip_key(ip)
+    since = now - timedelta(minutes=settings.ORG_APPLICATION_WINDOW_MINUTES)
+    count = session.scalar(select(func.count()).select_from(AuthFailure)
+                           .where(AuthFailure.ip == key, AuthFailure.at > since))
+    return (count or 0) >= settings.ORG_APPLICATIONS_PER_IP
+
+
+def note_application(session, ip: str, now: datetime) -> None:
+    session.add(AuthFailure(ip=(_APPLY_PREFIX + ip_key(ip))[:64], at=now))
+
+
+def ip_blocked(session, ip: str, now: datetime, settings: Settings) -> bool:
+    return _ip_blocked(session, ip, now, settings)
+
+
+def note_ip_failure(session, ip: str, now: datetime) -> None:
+    _note_ip_failure(session, ip, now)
+
+
 def _throttle(session, admin_id: str, ip: str) -> LoginThrottle:
     ip = ip_key(ip)
     row = session.scalar(select(LoginThrottle).where(LoginThrottle.admin_id == admin_id, LoginThrottle.ip == ip)
@@ -140,6 +178,13 @@ def _pair_locked(session, admin_id: str, ip: str, now: datetime) -> bool:
 
 def _organisation_active(session, organisation_id: str) -> bool:
     return session.scalar(select(Organisation.status).where(Organisation.id == organisation_id)) == OrgStatus.ACTIVE
+
+
+def _applying(session, organisation_id: str) -> bool:
+    """The organisation applied itself and is not approved yet."""
+    status = session.scalar(select(OrganisationApplication.status)
+                            .where(OrganisationApplication.organisation_id == organisation_id))
+    return status is not None and status != ApplicationStatus.APPROVED
 
 
 def in_backoff(admin: OrgAdmin, now: datetime) -> bool:
@@ -284,6 +329,9 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
                          detail={"step": "password", "reason": "address_rate_limited"})
             failure = ApiError(429, TOO_MANY, "RATE_LIMITED")
         else:
+            # A draft nobody submitted in time is deleted before anyone signs in to it.
+            from app import onboarding
+            onboarding.sweep_expired_drafts(session, now)
             found = session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email))
             admin = _locked_admin(session, found) if found else None
             reason: Optional[str] = None
@@ -301,8 +349,22 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
                 elif not _organisation_active(session, admin.organisation_id):
                     reason = "organisation_suspended"
                 elif not admin.totp_secret:
-                    # Enrolment happens only through the setup link.
-                    reason = "not_enrolled"
+                    applying = _applying(session, admin.organisation_id)
+                    if applying and correct and not in_backoff(admin, now):
+                        # A company's applicant who left before enrolling (they chose
+                        # the password themselves; there is no setup link): enrol now.
+                        _clear_failures(session, admin, ip)
+                        opened = _open_session(session, admin, SessionStage.ENROLL, now, settings, ip, user_agent)
+                        audit.record(session, audit.SIGN_IN_PASSWORD, SUCCESS, organisation_id=admin.organisation_id,
+                                     admin_id=admin.id, admin_email=admin.email, ip=ip,
+                                     detail={"next": SessionStage.ENROLL})
+                        return opened
+                    if applying and not correct:
+                        reason = "wrong_password"
+                        counted = True
+                    else:
+                        # Enrolment happens only through the setup link (an applicant in backoff waits).
+                        reason = "not_enrolled"
                 elif in_backoff(admin, now):
                     # Right or wrong, on to the code step; a wrong password gets
                     # a stand-in session that no code completes. Not counted.
@@ -344,14 +406,15 @@ def resolve(token: str, ip: str) -> Principal:
     now = utcnow()
     with session_scope() as session:
         row = session.execute(
-            select(AdminSession, OrgAdmin, Organisation)
+            select(AdminSession, OrgAdmin, Organisation, OrganisationApplication.status)
             .join(OrgAdmin, OrgAdmin.id == AdminSession.admin_id)
             .join(Organisation, Organisation.id == OrgAdmin.organisation_id)
+            .outerjoin(OrganisationApplication, OrganisationApplication.organisation_id == Organisation.id)
             .where(AdminSession.token_hash == security.token_hash(token))
         ).first()
         if row is None:
             raise ApiError(401, SESSION_REQUIRED, "AUTH_REQUIRED")
-        sess, admin, organisation = row
+        sess, admin, organisation, application_status = row
         idle = timedelta(minutes=settings.ORG_SESSION_IDLE_MINUTES)
         ended = (sess.revoked_at is not None or ensure_aware(sess.expires_at) <= now
                  or ensure_aware(sess.last_seen_at) + idle <= now or not admin.active
@@ -365,7 +428,8 @@ def resolve(token: str, ip: str) -> Principal:
         return Principal(admin_id=admin.id, email=admin.email, name=admin.name, session_id=sess.id,
                          stage=sess.stage, reauth_at=ensure_aware(sess.reauth_at), ip=ip,
                          organisation_id=organisation.id, organisation_name=organisation.name,
-                         password_ok=bool(sess.password_ok))
+                         password_ok=bool(sess.password_ok),
+                         application_status=application_status or ApplicationStatus.APPROVED)
 
 
 def _bearer(authorization: Optional[str]) -> Optional[str]:
@@ -732,10 +796,19 @@ def signed_in_any_stage(ip: str = Depends(client_ip),
     return any_session(ip, authorization)
 
 
-def current_admin(principal: Principal = Depends(signed_in_any_stage)) -> Principal:
-    """A fully signed-in admin. Every admin route depends on this."""
+def signed_in_admin(principal: Principal = Depends(signed_in_any_stage)) -> Principal:
+    """A fully signed-in admin, whether or not the organisation is approved:
+    only the company application routes (app.api.application) use this."""
     if principal.stage != SessionStage.FULL:
         raise ApiError(403, INCOMPLETE, "SESSION_INCOMPLETE")
+    return principal
+
+
+def current_admin(principal: Principal = Depends(signed_in_admin)) -> Principal:
+    """A fully signed-in admin of an approved organisation. Every portal
+    route depends on this: an organisation still applying gets 403."""
+    if principal.locked:
+        raise ApiError(403, NOT_APPROVED, "APPLICATION_NOT_APPROVED")
     return principal
 
 
@@ -744,3 +817,9 @@ def fresh_admin(principal: Principal = Depends(current_admin)) -> Principal:
     (approve, reject, mark paid, policy and payout changes)."""
     require_fresh(principal)
     return principal
+
+
+def open_enrolment(session, admin: OrgAdmin, now: datetime, ip: str, user_agent: Optional[str]) -> Opened:
+    """An enrolment session for an admin who just chose a password (a
+    company's applicant, app.api.application): an authenticator comes first."""
+    return _open_session(session, admin, SessionStage.ENROLL, now, get_settings(), ip, user_agent)

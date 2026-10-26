@@ -15,7 +15,11 @@ import {
  * paths and methods below are reachable. Answers that open a session carry
  * `session_token`: it goes into the httpOnly cookie and is removed from the
  * body, so page scripts never see a token. Receipt files and CSV exports
- * have their own routes (app/api/receipts, app/api/export).
+ * have their own routes (app/api/receipts, app/api/export), and so do a
+ * company's application documents (app/api/application/documents).
+ *
+ * Nothing under `platform/` is ever passed on: that API is Endod's super
+ * admin's (over endod-bus, with its own key), never the browser's.
  */
 type Rule = { pattern: RegExp; methods: string[]; signedOut?: boolean; maxBody?: number };
 
@@ -43,6 +47,12 @@ const RULES: Rule[] = [
   { pattern: new RegExp(`^batches/${ID}$`), methods: ["GET"] },
   { pattern: new RegExp(`^batches/${ID}/(mark-paid|cancel)$`), methods: ["POST"] },
   { pattern: /^reports$/, methods: ["GET"] },
+  // A company's own application (docs/company-onboarding.md): the account is
+  // made signed out; the rest needs the applicant's session.
+  { pattern: /^application\/start$/, methods: ["POST"], signedOut: true },
+  { pattern: /^application$/, methods: ["GET"] },
+  { pattern: /^application\/(contact|company)$/, methods: ["PUT"] },
+  { pattern: /^application\/submit$/, methods: ["POST"] },
 ];
 
 const WITH_BODY = new Set(["POST", "PUT", "PATCH"]);
@@ -67,7 +77,7 @@ async function handle(request: NextRequest, ctx: RouteContext<"/api/[...path]">)
     if (body.length > (rule.maxBody ?? SMALL)) return errorResponse(413, "Request too large.");
     headers.set("Content-Type", "application/json");
   }
-  if (token && (joined === "auth/login" || joined === "auth/setup")) {
+  if (token && (joined === "auth/login" || joined === "auth/setup" || joined === "application/start")) {
     // A new sign-in replaces whatever session this browser had: end the old one.
     const old = backendHeaders(request, token);
     if (old.headers) await callBackend("auth/logout", { method: "POST", headers: old.headers });

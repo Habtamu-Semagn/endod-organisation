@@ -30,8 +30,40 @@ The design follows the Endod super admin service (`endod-superadmin`).
 
 ## Security model
 
-- **Organisations and admins exist only through the CLI** (run by Endod; no sign-up).
-  Each admin belongs to exactly one organisation.
+- **Organisations** are made by Endod with the CLI (approved at once), or by a company
+  applying itself (**Apply as a company** on the sign-in page; see below). Each admin
+  belongs to exactly one organisation.
+- **Company applications** (`docs/company-onboarding.md`, the contract with the super
+  admin): the first step creates the organisation (a draft application) and its first
+  admin, who must enrol an authenticator (QR code and recovery codes) before going on;
+  then the company's details, three documents (trade licence, TIN certificate,
+  authorization letter; checked like receipts), review and submit. Each step is saved, and
+  the wizard resumes after sign-in. Applications are limited per address (5 an hour by
+  default, `ORG_APPLICATIONS_PER_IP`), and refused from an address the sign-in limit has
+  blocked. Only an approved, active organisation holds a TIN: an applicant is refused it
+  with one generic message (probing TINs counts against the address), while other
+  applications with the same TIN are allowed (no squatting) and flagged to Endod as
+  `duplicate_tin`. Emails are not verified (`email_verified: false`), so drafts not
+  submitted within 14 days are deleted with their admins, sessions and documents (audited
+  as `application_expired`); with no worker in this deployment, the sweep runs when an
+  application is started, when Endod lists applications and at sign-in. **Until
+  Endod approves it, the organisation is locked**: its admins reach only the application,
+  the Under review page and sign-out; every other API route answers 403
+  (`APPLICATION_NOT_APPROVED`, `backend/app/auth.py` `current_admin`). A rejected
+  application shows Endod's reason and can be fixed and resubmitted; a *closed* one
+  (rejected with `close: true`) is final: its admins see only that and sign-out.
+- **Platform API** (`/platform/*`, `backend/app/api/platform.py`): Endod's super admin lists,
+  reads, approves and rejects applications, downloads their documents, and lists, suspends
+  and reactivates organisations. It is reached only over the `endod-bus` network
+  (`endod-organisation-api:8000`) with `X-Platform-Key` equal to `ORG_PLATFORM_KEY`
+  (compared in constant time; unset or shorter than 32 characters: 503). It does not take
+  the BFF secret, the BFF secret does not open it, and the web app's BFF never passes
+  `platform/` paths on. Approval names the version the reviewer saw
+  (`expected_updated_at`, compared exactly under the lock; every applicant edit moves
+  `updated_at`), else 409. Every changing path locks the organisation, then the
+  application (`onboarding.lock_for_change`), so they cannot deadlock. Approving,
+  rejecting, closing, suspending and reactivating are audited with the reviewer's email. Suspending signs the organisation's admins out and refuses
+  their sign-in with the usual generic message.
 - **Tenant isolation**: every query of the portal API filters on the signed-in admin's
   organisation (`app/tenancy.py`). An id from another organisation answers `404 Not found.`,
   exactly like an id that does not exist. `backend/tests/test_tenancy.py` tries every
@@ -129,6 +161,16 @@ docker compose exec api python -m app.cli create-admin --org <id> --email ... --
 The web container joins the shared nginx edge network (`${SHARED_NGINX_NETWORK:-eyita_edge}`)
 as `endod-organisation`. nginx terminates TLS for organisation.endod-health.com, sets
 `X-Endod-Client-IP` and proxies to `http://endod-organisation:3000`.
+
+The API container also joins the external `endod-bus` network (`docker network create
+endod-bus` once per host) as `endod-organisation-api`, keeping its default network for
+Postgres. Set `ORG_PLATFORM_KEY` (at least 32 random characters) in `deploy/.env` and give
+the super admin the same value as its `ORGANISATION_PLATFORM_KEY`, with
+`ORGANISATION_API_URL=http://endod-organisation-api:8000`.
+
+**Rolling back below migration 0003** (`alembic downgrade 0002`) is refused while any
+company application is not approved: without its application such an organisation would
+count as approved. Approve, close or delete those applications first.
 
 ## Notes on `organisation-frontend/INTEGRATION_GUIDE.md`
 

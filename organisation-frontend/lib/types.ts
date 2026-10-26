@@ -2,10 +2,13 @@
 
 export type Stage = "totp" | "enroll" | "full";
 
+export type ApplicationStatus = "draft" | "submitted" | "approved" | "rejected" | "closed";
+
 export type Me = {
   stage: Stage;
   admin: { id: string; email: string; name: string };
-  organisation: { id: string; name: string };
+  /** application_status: "approved" for every organisation in business; else it is still applying (app/apply). */
+  organisation: { id: string; name: string; application_status?: ApplicationStatus };
   reauth_valid_until: string | null;
 };
 

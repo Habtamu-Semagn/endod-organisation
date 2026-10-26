@@ -518,7 +518,7 @@ def test_me_names_the_admins_organisation(client, clock):
     _, secret = make_admin(organisation_id=org_id)
     headers = sign_in(client, clock, secret)
     me = client.get("/auth/me", headers=headers).json()
-    assert me["organisation"] == {"id": org_id, "name": "Awash Breweries"}
+    assert me["organisation"] == {"id": org_id, "name": "Awash Breweries", "application_status": "approved"}
 
 
 def test_a_suspended_organisation_cannot_sign_in_and_its_sessions_end(client, clock):

@@ -12,6 +12,8 @@ export const BFF_SECRET = "e2e-bff-secret-0123456789abcdefghijklmnop";
 /** What our nginx adds to every request (the web app refuses anything without it). */
 export const EDGE_SECRET = "e2e-edge-secret-0123456789abcdefghijklmnop";
 export const EDGE_HEADERS = { "X-Endod-Edge-Key": EDGE_SECRET };
+/** Endod's super admin calls the API's /platform routes with it (never through the web app). */
+export const PLATFORM_KEY = "e2e-platform-key-0123456789abcdefghijklmnop";
 
 export const backendDir = path.join(__dirname, "..", "..", "backend");
 // The backend's Python: E2E_PYTHON (CI), else backend/.venv.
@@ -38,6 +40,7 @@ export const apiEnv: Record<string, string> = {
   SESSION_SECRET: "e2e-session-secret-0123456789abcdefghijklmnop",
   SITE_ORIGIN: WEB_ORIGIN,
   BFF_SHARED_SECRET: BFF_SECRET,
+  ORG_PLATFORM_KEY: PLATFORM_KEY,
   // The browser tests all come from 127.0.0.1; the per-address limit is tested in pytest.
   ORG_IP_FAILURE_LIMIT: "100",
   PYTHONUNBUFFERED: "1",

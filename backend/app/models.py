@@ -41,6 +41,36 @@ class OrgStatus:
     ALL = (ACTIVE, SUSPENDED)
 
 
+class ApplicationStatus:
+    """A company's own application (docs/company-onboarding.md). An organisation
+    without an application (made by the CLI, or before applications existed)
+    counts as approved."""
+
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    #: Endod refused it for good: never edited or resubmitted (reject with ``close``).
+    CLOSED = "closed"
+    ALL = (DRAFT, SUBMITTED, APPROVED, REJECTED, CLOSED)
+    #: The applicant may change the application (a rejected one is fixed and resubmitted).
+    EDITABLE = (DRAFT, REJECTED)
+
+
+class Sector:
+    ALL = ("government", "ngo", "manufacturing", "services", "finance", "telecom", "health", "education",
+           "retail", "transport", "agriculture", "other")
+
+
+class DocumentKind:
+    TRADE_LICENSE = "trade_license"
+    TIN_CERTIFICATE = "tin_certificate"
+    AUTHORIZATION_LETTER = "authorization_letter"
+    ALL = (TRADE_LICENSE, TIN_CERTIFICATE, AUTHORIZATION_LETTER)
+    LABELS = {TRADE_LICENSE: "Trade license", TIN_CERTIFICATE: "TIN certificate",
+              AUTHORIZATION_LETTER: "Authorization letter"}
+
+
 class PayoutMethod:
     """How an employee is paid back. TenaCare moves no money: it records the
     batch and exports the file the organisation uploads to its bank or Telebirr."""
@@ -82,7 +112,10 @@ class Relationship:
 # --- organisations and their admins ----------------------------------------------------------
 
 class Organisation(Base):
-    """An employer. Created by Endod with ``python -m app.cli create-org``."""
+    """An employer. Created by Endod with ``python -m app.cli create-org``, or
+    by a company applying itself (then with an OrganisationApplication, and
+    locked until Endod approves it; until then ``tin`` is a placeholder and the
+    TIN applied for is on the application)."""
 
     __tablename__ = "organisations"
 
@@ -137,6 +170,67 @@ class OrgAdmin(Base):
     code_backoff_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OrganisationApplication(Base):
+    """A company's application to use TenaCare, filled in by its first admin
+    (the contact) and reviewed by Endod through the platform API. One per
+    organisation; organisations without one are approved."""
+
+    __tablename__ = "organisation_applications"
+
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default=ApplicationStatus.DRAFT)
+    legal_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    trade_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    #: The TIN applied for (10 digits); copied to the organisation on approval. Not
+    #: unique: only an approved organisation holds a TIN (organisations.tin); other
+    #: applications with it are allowed and flagged to Endod (``duplicate_tin``).
+    tin: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, index=True)
+    business_license_number: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    sector: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    employee_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    #: The company's number (E.164; a landline or a mobile).
+    phone: Mapped[Optional[str]] = mapped_column(String(13), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
+    #: The contact (the first admin): their title and mobile; name and email are on the admin.
+    contact_admin_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    contact_title: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(13), nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: The Endod admin's email (also in the audit log).
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
+    #: Why Endod sent it back (shown to the applicant).
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'submitted', 'approved', 'rejected', 'closed')", name="status"),
+        CheckConstraint("employee_count IS NULL OR employee_count >= 1", name="employee_count_positive"),
+    )
+
+
+class ApplicationDocument(Base):
+    """A document of an application, on the files volume at
+    ``<ORG_RECEIPTS_DIR>/<organisation_id>/<id>`` (app.files), one per kind."""
+
+    __tablename__ = "application_documents"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    filename: Mapped[str] = mapped_column(String(160))
+    content_type: Mapped[str] = mapped_column(String(40))
+    size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    uploaded_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("organisation_id", "kind", name="uq_application_documents_org_kind"),)
 
 
 class LoginThrottle(Base):
