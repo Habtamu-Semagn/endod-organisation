@@ -283,3 +283,94 @@ def portal(client, clock):
 @pytest.fixture
 def other_portal(client, clock):
     return Portal(client, clock, email="hr@other.example", org_name="Other Org PLC")
+
+
+# --- company applications (app.api.application, app.api.platform) -------------------------
+
+PLATFORM_KEY = "test-platform-key-0123456789abcdefghijklmnop"
+COMPANY = {
+    "legal_name": "Abyssinia Textiles PLC", "trade_name": "Abyssinia Tex", "tin": "0045671234",
+    "business_license_number": "AA/14/123456", "sector": "manufacturing", "employee_count": 240,
+    "city": "Addis Ababa", "address": "Bole Sub-city, Woreda 3, House 512", "phone": "011 551 2345",
+    "email": "info@abyssinia-tex.example",
+}
+_applicant_numbers = iter(range(1, 100000))
+
+
+@pytest.fixture
+def platform_key(monkeypatch):
+    monkeypatch.setenv("ORG_PLATFORM_KEY", PLATFORM_KEY)
+    return {"X-Platform-Key": PLATFORM_KEY}
+
+
+def start_application(client, email=None, ip=CLIENT_IP, **fields):
+    """POST /application/start; returns the response."""
+    n = next(_applicant_numbers)
+    body = {"legal_name": f"Applicant {n} PLC", "full_name": "Meron Alemu", "title": "HR Manager",
+            "phone": "0911223344", "email": email or f"applicant{n}@company.example", "password": PASSWORD, **fields}
+    return client.post("/application/start", json=body, headers=from_ip(ip))
+
+
+class Applicant:
+    """A company applying: its account made and an authenticator enrolled."""
+
+    def __init__(self, client, clock, email=None, **fields):
+        self.client = client
+        self.clock = clock
+        resp = start_application(client, email=email, **fields)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["stage"] == "enroll"
+        self.enroll_headers = bearer(resp.json()["session_token"])
+        me = client.get("/auth/me", headers=self.enroll_headers).json()
+        self.email = me["admin"]["email"]
+        self.org_id = me["organisation"]["id"]
+        self.secret = client.post("/auth/enroll/start", headers=self.enroll_headers).json()["secret"]
+        done = client.post("/auth/enroll/confirm", json={"code": code(self.secret, clock)}, headers=self.enroll_headers)
+        assert done.status_code == 200, done.text
+        clock.advance()
+        self.recovery_codes = done.json()["recovery_codes"]
+        self.headers = bearer(done.json()["session_token"])
+
+    def get(self, path, **kw):
+        return self.client.get(path, headers=self.headers, **kw)
+
+    def put(self, path, **kw):
+        return self.client.put(path, headers=self.headers, **kw)
+
+    def post(self, path, **kw):
+        return self.client.post(path, headers={**self.headers, **kw.pop("headers", {})}, **kw)
+
+    def company(self, **changes):
+        resp = self.put("/application/company", json={**COMPANY, **changes})
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def upload(self, kind, data=PDF, filename=None):
+        return self.post(f"/application/documents/{kind}", content=data,
+                         headers={"X-Filename": filename or f"{kind}.pdf", "Content-Type": "application/octet-stream"})
+
+    def upload_all(self):
+        for kind in ("trade_license", "tin_certificate", "authorization_letter"):
+            resp = self.upload(kind)
+            assert resp.status_code == 201, resp.text
+
+    def submit(self):
+        return self.post("/application/submit")
+
+    def complete(self, **company):
+        """Every step filled in and submitted."""
+        self.company(**company)
+        self.upload_all()
+        resp = self.submit()
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "submitted"
+        return resp.json()
+
+    def sign_in_again(self):
+        self.headers = sign_in(self.client, self.clock, self.secret, email=self.email)
+        return self.headers
+
+
+@pytest.fixture
+def applicant(client, clock):
+    return Applicant(client, clock)

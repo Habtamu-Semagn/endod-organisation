@@ -92,7 +92,8 @@ def me(principal: Principal = Depends(auth.signed_in_any_stage)) -> Dict[str, An
     return {
         "stage": principal.stage,
         "admin": {"id": principal.admin_id, "email": principal.email, "name": principal.name},
-        "organisation": {"id": principal.organisation_id, "name": principal.organisation_name},
+        "organisation": {"id": principal.organisation_id, "name": principal.organisation_name,
+                         "application_status": principal.application_status},
         "reauth_valid_until": iso(until),
     }
 

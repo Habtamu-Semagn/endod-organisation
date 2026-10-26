@@ -1,5 +1,5 @@
-"""Operator commands, run by Endod (there is no sign-up: organisations and
-their admins exist only through these; an admin-site integration comes later).
+"""Operator commands, run by Endod (companies can also apply themselves through
+the web app: app.api.application; organisations made here are approved).
 
     python -m app.cli create-org --name "Ethio Telecom" --tin 0000030603
 
@@ -33,7 +33,7 @@ from sqlalchemy import delete, func, select
 
 from app import audit, auth, security, validation
 from app.db import ensure_aware, session_scope, utcnow
-from app.models import AuditResult, BenefitPolicy, Organisation, OrgAdmin, RecoveryCode
+from app.models import AuditResult, BenefitPolicy, Organisation, OrganisationApplication, OrgAdmin, RecoveryCode
 from app.policy import DEFAULT_ANNUAL_LIMIT_SANTIM
 
 CLI_DETAIL = {"via": "cli"}
@@ -143,11 +143,16 @@ def list_orgs(out: TextIO) -> None:
     with session_scope() as session:
         counts = dict(session.execute(select(OrgAdmin.organisation_id, func.count())
                                       .group_by(OrgAdmin.organisation_id)).all())
+        applying = dict(session.execute(select(OrganisationApplication.organisation_id, OrganisationApplication.status)
+                                        .where(OrganisationApplication.status != "approved")).all())
         orgs = list(session.scalars(select(Organisation).order_by(Organisation.created_at)))
         if not orgs:
             print("No organisations.", file=out)
         for o in orgs:
-            print(f"{o.id}  {o.tin}  {o.status:9} admins {counts.get(o.id, 0):<3} {o.name}", file=out)
+            # A company still applying has no TIN of its own yet (see the platform API).
+            tin = o.tin if o.id not in applying else "-".ljust(10)
+            note = f"  (application {applying[o.id]})" if o.id in applying else ""
+            print(f"{o.id}  {tin}  {o.status:9} admins {counts.get(o.id, 0):<3} {o.name}{note}", file=out)
 
 
 def list_admins(out: TextIO, organisation_id: Optional[str] = None) -> None:

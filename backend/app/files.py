@@ -85,7 +85,7 @@ def safe_filename(name: Optional[str], content_type: str) -> str:
 
 
 async def store_stream(chunks: AsyncIterator[bytes], organisation_id: str, file_id: str,
-                       max_bytes: int = MAX_FILE_BYTES) -> Tuple[int, str, str]:
+                       max_bytes: int = MAX_FILE_BYTES, what: str = "A receipt") -> Tuple[int, str, str]:
     """Write an upload to disk while hashing it. Returns (size, sha256, content type).
 
     The file is written beside its final place and moved there only once it
@@ -104,7 +104,7 @@ async def store_stream(chunks: AsyncIterator[bytes], organisation_id: str, file_
                     continue
                 size += len(chunk)
                 if size > max_bytes:
-                    raise FileRejected(f"A receipt can be at most {max_bytes // (1024 * 1024)} MB.", 413)
+                    raise FileRejected(f"{what} can be at most {max_bytes // (1024 * 1024)} MB.", 413)
                 if len(head) < 16:
                     head += chunk[:16 - len(head)]
                 digest.update(chunk)

@@ -57,6 +57,25 @@ def phone(value: Optional[str]) -> str:
     return f"+251{rest}"
 
 
+def ethiopian_number(value: Optional[str]) -> str:
+    """Any Ethiopian number (a landline like 011 551 2345, or a mobile) as
+    E.164: +251 and 9 digits. Accepts the 0..., 251... and +251... forms."""
+    raw = _PHONE_DIGITS.sub("", value or "")
+    if raw.startswith("+"):
+        raw = raw[1:]
+        if not raw.startswith("251"):
+            raise Invalid("Phone must be an Ethiopian number, like +251115512345.")
+    if raw.startswith("251") and len(raw) == 12:
+        rest = raw[3:]
+    elif raw.startswith("0"):
+        rest = raw[1:]
+    else:
+        rest = raw
+    if not re.fullmatch(r"[1-9][0-9]{8}", rest):
+        raise Invalid("Phone must be an Ethiopian number, like +251115512345.")
+    return f"+251{rest}"
+
+
 def endod_id(value: Optional[str]) -> Optional[str]:
     """The Endod health card id: DE followed by 6 digits (spaces and dashes ignored)."""
     raw = re.sub(r"[\s\-]", "", value or "").upper()
