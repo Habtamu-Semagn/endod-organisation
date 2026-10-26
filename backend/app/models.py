@@ -50,7 +50,9 @@ class ApplicationStatus:
     SUBMITTED = "submitted"
     APPROVED = "approved"
     REJECTED = "rejected"
-    ALL = (DRAFT, SUBMITTED, APPROVED, REJECTED)
+    #: Endod refused it for good: never edited or resubmitted (reject with ``close``).
+    CLOSED = "closed"
+    ALL = (DRAFT, SUBMITTED, APPROVED, REJECTED, CLOSED)
     #: The applicant may change the application (a rejected one is fixed and resubmitted).
     EDITABLE = (DRAFT, REJECTED)
 
@@ -181,7 +183,9 @@ class OrganisationApplication(Base):
     status: Mapped[str] = mapped_column(String(16), default=ApplicationStatus.DRAFT)
     legal_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     trade_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    #: The TIN applied for (10 digits); copied to the organisation on approval.
+    #: The TIN applied for (10 digits); copied to the organisation on approval. Not
+    #: unique: only an approved organisation holds a TIN (organisations.tin); other
+    #: applications with it are allowed and flagged to Endod (``duplicate_tin``).
     tin: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, index=True)
     business_license_number: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
     sector: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
@@ -205,11 +209,8 @@ class OrganisationApplication(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (
-        CheckConstraint("status IN ('draft', 'submitted', 'approved', 'rejected')", name="status"),
+        CheckConstraint("status IN ('draft', 'submitted', 'approved', 'rejected', 'closed')", name="status"),
         CheckConstraint("employee_count IS NULL OR employee_count >= 1", name="employee_count_positive"),
-        # Two submitted applications never hold the same TIN (the rest is checked by the API).
-        Index("uq_organisation_applications_submitted_tin", "tin", unique=True,
-              postgresql_where=text("status = 'submitted'"), sqlite_where=text("status = 'submitted'")),
     )
 
 

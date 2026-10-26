@@ -7,8 +7,8 @@ import re
 
 import pytest
 from conftest import (
-    CLIENT_IP, COMPANY, JPEG, PASSWORD, PDF, PNG, WEBP, Applicant, bearer, events, from_ip, make_admin, make_org,
-    password_step, sign_in, start_application,
+    CLIENT_IP, COMPANY, JPEG, PASSWORD, PDF, PNG, WEBP, Applicant, approve_application, bearer, events, from_ip,
+    make_admin, make_org, password_step, sign_in, start_application,
 )
 
 from app.db import session_scope
@@ -266,26 +266,36 @@ def test_a_tin_of_an_approved_organisation_is_refused_generically(client, clock)
     assert a.put("/application/company", json={**COMPANY, "tin": "0045671235"}).status_code == 200
 
 
-def test_a_tin_of_another_submitted_application_is_refused_and_drafts_do_not_block(client, clock, platform_key):
-    first = Applicant(client, clock)
-    second = Applicant(client, clock)
+def test_applications_never_block_a_tin_only_an_approved_active_organisation_does(client, clock, platform_key):
+    """No TIN squatting: whoever applies first with a TIN holds nothing."""
+    squatter = Applicant(client, clock)
+    squatter.complete()
+    real = Applicant(client, clock)
+    real.complete()  # the same TIN, submitted after the squatter's: allowed
     third = Applicant(client, clock)
-    # Two drafts may hold the same TIN...
-    first.company()
-    second.company()
-    second.upload_all()
-    first.upload_all()
-    # ...until one is submitted: then the other cannot submit it, or save it again.
-    first.submit()
-    resp = second.submit()
-    assert resp.status_code == 409 and resp.json()["error"] == REFUSED
-    assert third.put("/application/company", json=COMPANY).status_code == 409
-    # A rejected application no longer holds it.
-    client.post(f"/platform/applications/{first.org_id}/reject", headers=platform_key,
-                json={"reason": "Wrong company.", "reviewer": "reviewer@endod.example"})
-    assert second.submit().status_code == 200
-    # Now the first, fixed, cannot resubmit it.
-    assert first.submit().json()["error"] == REFUSED
+    third.company()
+    for a in (squatter, real):
+        item = client.get(f"/platform/applications/{a.org_id}", headers=platform_key).json()
+        assert item["duplicate_tin"] is True and item["email_verified"] is False
+
+    # Endod approves the real company: from then on, the TIN is taken.
+    assert approve_application(client, platform_key, real.org_id).status_code == 200
+    assert third.put("/application/company", json=COMPANY).json()["error"] == REFUSED
+    assert third.put("/application/company", json={**COMPANY, "tin": "0045671299"}).status_code == 200
+    # The squatter can no longer be approved with it.
+    resp = approve_application(client, platform_key, squatter.org_id)
+    assert resp.status_code == 409 and "TIN" in resp.json()["detail"]
+
+
+def test_a_suspended_organisation_does_not_block_its_tin_for_applicants(client, clock, platform_key, portal):
+    with session_scope() as session:
+        tin = session.get(Organisation, portal.org_id).tin
+    client.post(f"/platform/organisations/{portal.org_id}/suspend", headers=platform_key,
+                json={"reviewer": "reviewer@endod.example"})
+    a = Applicant(client, clock)
+    assert a.put("/application/company", json={**COMPANY, "tin": tin}).status_code == 200
+    detail = client.get(f"/platform/applications/{a.org_id}", headers=platform_key).json()
+    assert detail["duplicate_tin"] is True
 
 
 def test_tin_probing_is_counted_against_the_address(client, clock, monkeypatch):
@@ -388,8 +398,7 @@ def test_approval_opens_the_portal(client, clock, platform_key):
     a = Applicant(client, clock)
     a.complete()
     assert a.get("/overview").status_code == 403
-    resp = client.post(f"/platform/applications/{a.org_id}/approve", headers=platform_key,
-                       json={"reviewer": "reviewer@endod.example"})
+    resp = approve_application(client, platform_key, a.org_id)
     assert resp.status_code == 200
     # The same session now reaches everything.
     assert a.get("/overview").status_code == 200

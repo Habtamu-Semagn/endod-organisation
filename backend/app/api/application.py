@@ -12,6 +12,10 @@
   file is the body, its name in X-Filename); ``GET`` the same path views it.
 * ``POST /application/submit``: send it to Endod.
 
+Every change locks the organisation, then the application
+(app.onboarding.lock_for_change), and moves ``updated_at`` on: Endod approves
+only the version its reviewer saw (``expected_updated_at``).
+
 These are the only routes (with sign-in and sign-out) that the admins of an
 organisation that is not approved can use (app.auth.current_admin).
 """
@@ -87,12 +91,16 @@ def start(body: StartRequest, request: Request, ip: str = Depends(auth.client_ip
     failure: Optional[ApiError] = None
     try:
         with session_scope() as session:
+            # Drafts nobody submitted in time go first (their emails become free again).
+            onboarding.sweep_expired_drafts(session, now)
             if auth.ip_blocked(session, ip, now, settings) or auth.application_limited(session, ip, now, settings):
                 audit.record(session, audit.APPLICATION_STARTED, AuditResult.FAILURE, ip=ip,
                              admin_email=security.email_fingerprint(email), detail={"reason": "address_rate_limited"})
                 failure = ApiError(429, TOO_MANY_APPLICATIONS, "RATE_LIMITED")
             elif session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email)) is not None:
+                # Probing for accounts costs an attempt, like an application and a failed sign-in.
                 auth.note_ip_failure(session, ip, now)
+                auth.note_application(session, ip, now)
                 audit.record(session, audit.APPLICATION_STARTED, AuditResult.FAILURE, ip=ip,
                              admin_email=security.email_fingerprint(email), detail={"reason": "email_taken"})
                 failure = ApiError(409, EMAIL_REFUSED, "APPLICATION_REFUSED")
@@ -163,8 +171,8 @@ class CompanyStep(BaseModel):
 
 def _save(principal: Principal, step: str, apply) -> Dict[str, Any]:
     with session_scope() as session:
-        org = _organisation(session, principal, lock=True)
-        app = onboarding.require_editable(onboarding.application_of(session, org.id, lock=True))
+        org, app = onboarding.lock_for_change(session, principal.organisation_id)
+        onboarding.require_editable(app)
         apply(session, org, app)
         app.updated_at = utcnow()
         audit.by(session, principal, audit.APPLICATION_SAVED, target_type="organisation", target_id=org.id,
@@ -257,9 +265,9 @@ async def upload_document(kind: str, request: Request,
 
     def save() -> tuple:
         with session_scope() as session:
-            org = _organisation(session, principal, lock=True)
             # Again under the lock: the application may have been submitted meanwhile.
-            app = onboarding.require_editable(onboarding.application_of(session, org.id, lock=True))
+            org, app = onboarding.lock_for_change(session, principal.organisation_id)
+            onboarding.require_editable(app)
             old = session.scalar(select(ApplicationDocument).where(
                 ApplicationDocument.organisation_id == org.id, ApplicationDocument.kind == kind))
             replaced = old.id if old is not None else None
@@ -330,32 +338,28 @@ def read_document(kind: str, principal: Principal = Depends(signed_in_admin)):
 @router.post("/submit")
 def submit(principal: Principal = Depends(signed_in_admin)) -> Dict[str, Any]:
     refused = False
-    try:
-        with session_scope() as session:
-            org = _organisation(session, principal, lock=True)
-            app = onboarding.require_editable(onboarding.application_of(session, org.id, lock=True))
-            gaps = onboarding.missing(session, app)
-            unfinished = [onboarding.STEP_NAMES[step] for step in onboarding.STEPS if gaps[step]]
-            if unfinished:
-                raise ApiError(400, f"Finish these steps first: {', '.join(unfinished)}.", "INCOMPLETE")
-            if onboarding.tin_taken(session, app.tin, org.id):
-                audit.by(session, principal, audit.APPLICATION_SUBMITTED, AuditResult.FAILURE,
-                         target_type="organisation", target_id=org.id, detail={"reason": "tin_taken"})
-                refused = True
-            else:
-                now = utcnow()
-                resubmitted = app.status == ApplicationStatus.REJECTED
-                app.status = ApplicationStatus.SUBMITTED
-                app.submitted_at = app.updated_at = now
-                app.rejection_reason = None
-                app.reviewed_at = app.reviewed_by = None
-                audit.by(session, principal, audit.APPLICATION_SUBMITTED, target_type="organisation",
-                         target_id=org.id, target_name=app.legal_name, detail={"resubmitted": resubmitted})
-                # The partial unique index settles two submissions of one TIN at once.
-                session.flush()
-                return onboarding.application_payload(session, org)
-    except IntegrityError as exc:
-        raise ApiError(409, onboarding.REFUSED, "APPLICATION_REFUSED") from exc
+    with session_scope() as session:
+        org, app = onboarding.lock_for_change(session, principal.organisation_id)
+        onboarding.require_editable(app)
+        gaps = onboarding.missing(session, app)
+        unfinished = [onboarding.STEP_NAMES[step] for step in onboarding.STEPS if gaps[step]]
+        if unfinished:
+            raise ApiError(400, f"Finish these steps first: {', '.join(unfinished)}.", "INCOMPLETE")
+        if onboarding.tin_taken(session, app.tin, org.id):
+            audit.by(session, principal, audit.APPLICATION_SUBMITTED, AuditResult.FAILURE,
+                     target_type="organisation", target_id=org.id, detail={"reason": "tin_taken"})
+            refused = True
+        else:
+            now = utcnow()
+            resubmitted = app.status == ApplicationStatus.REJECTED
+            app.status = ApplicationStatus.SUBMITTED
+            app.submitted_at = app.updated_at = now
+            app.rejection_reason = None
+            app.reviewed_at = app.reviewed_by = None
+            audit.by(session, principal, audit.APPLICATION_SUBMITTED, target_type="organisation",
+                     target_id=org.id, target_name=app.legal_name, detail={"resubmitted": resubmitted})
+            session.flush()
+            return onboarding.application_payload(session, org)
     if refused:
         raise ApiError(409, onboarding.REFUSED, "APPLICATION_REFUSED")
     raise AssertionError("unreachable")

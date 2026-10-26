@@ -9,6 +9,16 @@ BFF's secret, and the web app's BFF never passes them on (its allowlist has no
 
 Approving, rejecting, suspending and reactivating are audited with the Endod
 admin's email (``reviewer``); so is every view of a document.
+
+Amendment 1: approval names the version the reviewer saw
+(``expected_updated_at``, compared exactly under the lock: every applicant
+edit moves ``updated_at``); ``reject`` with ``close`` ends an application for
+good (``closed``); list and detail carry ``duplicate_tin`` and
+``email_verified``.
+
+Lock order: approve, reject and suspend lock the organisation row first, then
+the application (app.onboarding.lock_for_change), exactly as the applicant's
+own paths do, so an applicant's save and Endod's decision never deadlock.
 """
 
 from __future__ import annotations
@@ -18,14 +28,14 @@ import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app import audit, auth, onboarding
 from app.api.application import document_of, send_document
 from app.config import get_settings
-from app.db import iso, session_scope, utcnow
+from app.db import ensure_aware, iso, session_scope, utcnow
 from app.errors import ApiError
 from app.models import (
     ApplicationStatus, AuditResult, Employee, OrgAdmin, Organisation, OrganisationApplication, OrgStatus,
@@ -74,9 +84,16 @@ class Review(BaseModel):
         return value
 
 
+class Approval(Review):
+    #: ``updated_at`` of the detail the reviewer saw: approval is refused if it changed since.
+    expected_updated_at: AwareDatetime
+
+
 class Rejection(Review):
     #: Shown to the applicant on their Under review page.
     reason: str = Field(min_length=3, max_length=1000)
+    #: True: the application is closed for good (``closed``), never edited or resubmitted.
+    close: bool = False
 
     @field_validator("reason")
     @classmethod
@@ -91,13 +108,26 @@ def _caller_ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
-def _application(session, application_id: str, lock: bool = False) -> OrganisationApplication:
+CHANGED = "The application changed since you opened it. Reload it."
+
+
+def _application(session, application_id: str) -> OrganisationApplication:
     if not _HEX_ID.match(application_id or ""):
         raise _not_found()
-    app = onboarding.application_of(session, application_id, lock=lock)
+    app = onboarding.application_of(session, application_id)
     if app is None:
         raise _not_found()
     return app
+
+
+def _locked(session, application_id: str):
+    """The organisation and its application, locked in the applicant's order."""
+    if not _HEX_ID.match(application_id or ""):
+        raise _not_found()
+    org, app = onboarding.lock_for_change(session, application_id)
+    if org is None or app is None:
+        raise _not_found()
+    return org, app
 
 
 # --- applications ------------------------------------------------------------------------
@@ -106,6 +136,9 @@ def _application(session, application_id: str, lock: bool = False) -> Organisati
 def list_applications(status: Optional[str] = Query(default=None)) -> Dict[str, List[Dict[str, Any]]]:
     if status is not None and status not in ApplicationStatus.ALL:
         raise ApiError(400, f"status must be one of {', '.join(ApplicationStatus.ALL)}.", "VALIDATION_ERROR")
+    with session_scope() as session:
+        # No worker runs here: expired drafts go when Endod looks (and on applying or signing in).
+        onboarding.sweep_expired_drafts(session)
     with session_scope() as session:
         query = select(OrganisationApplication).order_by(
             func.coalesce(OrganisationApplication.submitted_at, OrganisationApplication.created_at).desc(),
@@ -136,14 +169,13 @@ def read_document(application_id: str, kind: str, request: Request):
 
 
 @router.post("/applications/{application_id}/approve")
-def approve(application_id: str, body: Review, request: Request) -> Dict[str, str]:
+def approve(application_id: str, body: Approval, request: Request) -> Dict[str, str]:
     try:
         with session_scope() as session:
-            app = _application(session, application_id, lock=True)
-            if app.status != ApplicationStatus.SUBMITTED:
-                raise ApiError(409, f"Only a submitted application can be approved (this one is {app.status}).",
-                               "WRONG_STATUS")
-            org = session.scalar(select(Organisation).where(Organisation.id == app.organisation_id).with_for_update())
+            org, app = _locked(session, application_id)
+            # Exactly the version the reviewer saw, checked under the lock.
+            if app.status != ApplicationStatus.SUBMITTED or ensure_aware(app.updated_at) != body.expected_updated_at:
+                raise ApiError(409, CHANGED, "APPLICATION_CHANGED")
             if session.scalar(select(Organisation.id).where(Organisation.tin == app.tin,
                                                             Organisation.id != org.id)) is not None:
                 raise ApiError(409, "Another organisation already has this TIN.", "TIN_TAKEN")
@@ -169,21 +201,24 @@ def approve(application_id: str, body: Review, request: Request) -> Dict[str, st
 
 @router.post("/applications/{application_id}/reject")
 def reject(application_id: str, body: Rejection, request: Request) -> Dict[str, str]:
+    new_status = ApplicationStatus.CLOSED if body.close else ApplicationStatus.REJECTED
     with session_scope() as session:
-        app = _application(session, application_id, lock=True)
+        _org, app = _locked(session, application_id)
         if app.status != ApplicationStatus.SUBMITTED:
             raise ApiError(409, f"Only a submitted application can be rejected (this one is {app.status}).",
                            "WRONG_STATUS")
         now = utcnow()
-        app.status = ApplicationStatus.REJECTED
+        app.status = new_status
         app.rejection_reason = body.reason
         app.reviewed_at = app.updated_at = now
         app.reviewed_by = body.reviewer
-        audit.record(session, audit.APPLICATION_REJECTED, AuditResult.SUCCESS, organisation_id=app.organisation_id,
+        audit.record(session, audit.APPLICATION_CLOSED if body.close else audit.APPLICATION_REJECTED,
+                     AuditResult.SUCCESS, organisation_id=app.organisation_id,
                      admin_email=body.reviewer, ip=_caller_ip(request), target_type="organisation",
                      target_id=app.organisation_id, target_name=app.legal_name,
-                     detail={"via": "platform", "reviewer": body.reviewer, "reason": body.reason})
-    return {"status": ApplicationStatus.REJECTED}
+                     detail={"via": "platform", "reviewer": body.reviewer, "reason": body.reason,
+                             "close": body.close})
+    return {"status": new_status}
 
 
 # --- organisations -------------------------------------------------------------------------
@@ -214,9 +249,10 @@ def _set_status(organisation_id: str, body: Review, request: Request, new_status
     if not _HEX_ID.match(organisation_id or ""):
         raise _not_found("Organisation")
     with session_scope() as session:
-        org = session.scalar(_approved().where(Organisation.id == organisation_id).with_for_update(of=Organisation))
-        if org is None:
+        if session.scalar(_approved().where(Organisation.id == organisation_id)) is None:
             raise _not_found("Organisation")
+        # The organisation row is the first (and here the only) lock, as everywhere.
+        org, _app = onboarding.lock_for_change(session, organisation_id)
         changed = org.status != new_status
         org.status = new_status
         now = utcnow()

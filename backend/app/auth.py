@@ -329,6 +329,9 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
                          detail={"step": "password", "reason": "address_rate_limited"})
             failure = ApiError(429, TOO_MANY, "RATE_LIMITED")
         else:
+            # A draft nobody submitted in time is deleted before anyone signs in to it.
+            from app import onboarding
+            onboarding.sweep_expired_drafts(session, now)
             found = session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email))
             admin = _locked_admin(session, found) if found else None
             reason: Optional[str] = None

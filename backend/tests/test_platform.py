@@ -7,12 +7,14 @@ import json
 
 import pytest
 from conftest import (
-    BFF_SECRET, CLIENT_IP, COMPANY, PDF, PLATFORM_KEY, PNG, Applicant, events, make_admin, make_org, password_step,
-    sign_in,
+    BFF_SECRET, CLIENT_IP, COMPANY, PDF, PLATFORM_KEY, PNG, Applicant, approve_application, events, make_admin,
+    make_org, password_step, sign_in,
 )
 from fastapi.testclient import TestClient
 
 REVIEWER = {"reviewer": "reviewer@endod.example"}
+SEEN = "2026-10-20T08:00:00+00:00"
+CHANGED = "The application changed since you opened it. Reload it."
 UNKNOWN = "b2" * 16
 
 
@@ -78,7 +80,8 @@ def test_every_route_needs_the_key_and_not_the_bff_secret(db, platform_key, meth
         assert resp.status_code == 401, (method, path, headers)
         assert resp.json()["detail"] == "Authentication required."
     # The right key alone (no BFF secret): past the key, to the unknown id.
-    resp = bare.request(method, path, json={"reason": "A fine reason.", **REVIEWER}, headers=platform_key)
+    resp = bare.request(method, path, json={"reason": "A fine reason.", "expected_updated_at": SEEN, **REVIEWER},
+                        headers=platform_key)
     assert resp.status_code in (200, 404), (method, path, resp.text)
 
 
@@ -111,7 +114,8 @@ def test_listing_applications_newest_first_with_the_contract_fields(client, cloc
     assert [i["id"] for i in submitted] == [second.org_id, first.org_id]
     item = submitted[0]
     assert set(item) == {"id", "legal_name", "trade_name", "tin", "sector", "employee_count", "city", "status",
-                         "submitted_at", "updated_at", "contact"}
+                         "submitted_at", "updated_at", "duplicate_tin", "email_verified", "contact"}
+    assert item["duplicate_tin"] is False and item["email_verified"] is False
     assert item["legal_name"] == "Second Submitted PLC" and item["tin"] == "0045670002"
     assert item["trade_name"] == COMPANY["trade_name"] and item["sector"] == "manufacturing"
     assert item["employee_count"] == 240 and item["city"] == "Addis Ababa" and item["status"] == "submitted"
@@ -163,18 +167,24 @@ def test_approving_needs_a_submitted_application_and_is_audited(client, clock, e
     a = Applicant(client, clock)
     a.company()
     a.upload_all()
-    draft = endod.post(f"/platform/applications/{a.org_id}/approve", json=REVIEWER)
-    assert draft.status_code == 409 and "submitted" in draft.json()["detail"]
+    draft = approve_application(endod, {}, a.org_id)
+    assert draft.status_code == 409 and draft.json()["detail"] == CHANGED
     a.submit()
+    seen = endod.get(f"/platform/applications/{a.org_id}").json()["updated_at"]
 
-    for body in ({}, {"reviewer": "no-at-sign"}, {"reviewer": "a @b.example"}):
-        assert endod.post(f"/platform/applications/{a.org_id}/approve", json=body).status_code == 422
-    assert endod.post(f"/platform/applications/{UNKNOWN}/approve", json=REVIEWER).status_code == 404
+    for body in ({}, {"reviewer": "no-at-sign", "expected_updated_at": seen},
+                 {"reviewer": "a @b.example", "expected_updated_at": seen}, REVIEWER,
+                 {**REVIEWER, "expected_updated_at": "yesterday"},
+                 {**REVIEWER, "expected_updated_at": "2026-10-20T08:00:00"}):  # no timezone
+        assert endod.post(f"/platform/applications/{a.org_id}/approve", json=body).status_code == 422, body
+    assert endod.post(f"/platform/applications/{UNKNOWN}/approve",
+                      json={**REVIEWER, "expected_updated_at": seen}).status_code == 404
 
-    ok = endod.post(f"/platform/applications/{a.org_id}/approve", json={"reviewer": " Reviewer@Endod.example "})
+    ok = endod.post(f"/platform/applications/{a.org_id}/approve",
+                    json={"reviewer": " Reviewer@Endod.example ", "expected_updated_at": seen})
     assert ok.status_code == 200 and ok.json() == {"status": "approved"}
-    again = endod.post(f"/platform/applications/{a.org_id}/approve", json=REVIEWER)
-    assert again.status_code == 409 and again.json()["detail"]
+    again = endod.post(f"/platform/applications/{a.org_id}/approve", json={**REVIEWER, "expected_updated_at": seen})
+    assert again.status_code == 409 and again.json()["detail"] == CHANGED
     assert endod.post(f"/platform/applications/{a.org_id}/reject",
                       json={"reason": "Too late.", **REVIEWER}).status_code == 409
 
@@ -207,7 +217,7 @@ def test_rejecting_needs_a_reason_and_a_submitted_application(client, clock, end
     assert resp.status_code == 200 and resp.json() == {"status": "rejected"}
     assert endod.post(f"/platform/applications/{a.org_id}/reject",
                       json={"reason": "Twice.", **REVIEWER}).status_code == 409
-    assert endod.post(f"/platform/applications/{a.org_id}/approve", json=REVIEWER).status_code == 409
+    assert approve_application(endod, {}, a.org_id).status_code == 409
 
     rejected = events("application_rejected")
     assert len(rejected) == 1 and rejected[0][2] == "reviewer@endod.example"
@@ -221,7 +231,7 @@ def test_approval_refuses_a_tin_another_organisation_took_meanwhile(client, cloc
     a = Applicant(client, clock)
     a.complete()
     make_org("Came Later PLC", tin=COMPANY["tin"])  # by the CLI, after the submission
-    resp = endod.post(f"/platform/applications/{a.org_id}/approve", json=REVIEWER)
+    resp = approve_application(endod, {}, a.org_id)
     assert resp.status_code == 409 and "TIN" in resp.json()["detail"]
     assert endod.get(f"/platform/applications/{a.org_id}").json()["status"] == "submitted"
     assert a.get("/overview").status_code == 403
@@ -286,7 +296,7 @@ def test_suspend_and_reactivate_answer_404_for_unknown_or_unapproved_organisatio
 def test_a_suspended_approved_company_keeps_its_approval(client, clock, endod):
     a = Applicant(client, clock)
     a.complete()
-    endod.post(f"/platform/applications/{a.org_id}/approve", json=REVIEWER)
+    approve_application(endod, {}, a.org_id)
     endod.post(f"/platform/organisations/{a.org_id}/suspend", json=REVIEWER)
     assert a.get("/application").status_code == 401
     endod.post(f"/platform/organisations/{a.org_id}/reactivate", json=REVIEWER)

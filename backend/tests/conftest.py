@@ -371,6 +371,13 @@ class Applicant:
         return self.headers
 
 
+def approve_application(client, headers, org_id, reviewer="reviewer@endod.example"):
+    """Approve as the super admin does: the version from the detail it just read."""
+    seen = client.get(f"/platform/applications/{org_id}", headers=headers).json()["updated_at"]
+    return client.post(f"/platform/applications/{org_id}/approve", headers=headers,
+                       json={"reviewer": reviewer, "expected_updated_at": seen})
+
+
 @pytest.fixture
 def applicant(client, clock):
     return Applicant(client, clock)

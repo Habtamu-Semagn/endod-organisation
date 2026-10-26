@@ -56,3 +56,19 @@ ids are 32-char lowercase hex. Unknown ids -> 404.
 - Verifications: a Hospitals | Companies switch; Companies lists applications with
   detail, documents, Approve and Reject with reason (fresh TOTP re-auth, audited).
 - A Companies directory (or a tab in Organisations): list, suspend, reactivate (re-auth, audited).
+
+## Amendment 1 (after security review)
+
+- States add `closed`: terminal, never editable or resubmittable. Drafts not
+  submitted within 14 days are deleted (organisation, admin, documents).
+- TIN: only an APPROVED active organisation holds a TIN. Other applications
+  with the same TIN are allowed; list and detail responses add
+  `"duplicate_tin": bool` (another application or organisation has this TIN)
+  and `"email_verified": false` (no email verification yet).
+- `POST /platform/applications/{id}/approve` body:
+  `{"reviewer", "expected_updated_at": "<updated_at from the detail the reviewer saw>"}`.
+  409 `{"detail": "The application changed since you opened it. Reload it."}`
+  when it no longer matches (or status is not `submitted`).
+- `POST /platform/applications/{id}/reject` body adds optional `"close": bool`
+  (default false). With `close: true` the status becomes `closed`.
+- `status` filter accepts `closed`.
