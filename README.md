@@ -205,6 +205,28 @@ Postgres. Set `ORG_PLATFORM_KEY` (at least 32 random characters) in `deploy/.env
 the super admin the same value as its `ORGANISATION_PLATFORM_KEY`, with
 `ORGANISATION_API_URL=http://endod-organisation-api:8000`.
 
+**Upgrading an existing database to row-level security** (0004 and 0005): the platform
+role must exist first; the init scripts only run on a new volume. As the superuser, once:
+
+```sh
+cd deploy && git pull
+docker compose exec -T postgres sh -s < postgres-init/20-platform-role.sh
+docker compose --env-file .env up -d --build   # `migrate` runs 0004 and 0005 as org_owner, then the API starts
+```
+
+**Rolling back row-level security** (to 0003) needs the 0003-era *code* as well as the
+schema: the current code calls the 0004 look-up functions (sign-in fails without them),
+while the 0003-era image cannot downgrade (it has no 0004 or 0005 scripts). So stop the
+API, downgrade with the current image, then roll the image back:
+
+```sh
+cd deploy
+docker compose stop web api
+docker compose --env-file .env run --rm migrate alembic downgrade 0003   # current image: knows 0004/0005
+git checkout <the last commit before row-level security>                  # e.g. cff4790
+docker compose --env-file .env up -d --build   # 0003-era images; `migrate` finds head (0003) already there
+```
+
 **Rolling back below migration 0003** (`alembic downgrade 0002`) is refused while any
 company application is not approved: without its application such an organisation would
 count as approved. Approve, close or delete those applications first.

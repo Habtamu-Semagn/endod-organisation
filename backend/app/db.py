@@ -7,8 +7,9 @@ Tenant context (PostgreSQL row-level security, migration 0004). Every
 organisation-scoped table refuses rows of any organisation but the one the
 transaction acts for, even if a query forgets its ``organisation_id`` filter.
 Each session says who it acts for, and every transaction it begins sets it
-again with ``set_config(..., true)`` (transaction-local: a pooled connection
-never carries it over to the next user):
+again with ``set_config(..., true)`` or ``SET LOCAL ROLE`` (transaction-local;
+and every checkout from the pool runs ``RESET ROLE`` and ``RESET ALL``, so even
+a session-level setting never reaches the next request):
 
 * ``tenant_session(organisation_id)``: a signed-in admin's request
   (``app.organisation_id``); the portal routes use only this;
@@ -98,6 +99,8 @@ def get_engine() -> Engine:
         _engine = create_engine(url, **kwargs)
         if url.startswith("sqlite"):
             event.listen(_engine, "connect", _sqlite_foreign_keys)
+        else:
+            event.listen(_engine, "checkout", _reset_session_state)
         _engine_url = url
         _sessions = sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine
@@ -107,6 +110,20 @@ def _sqlite_foreign_keys(dbapi_connection, _record) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
+
+
+def _reset_session_state(dbapi_connection, _record, _proxy) -> None:
+    """Every checkout from the pool starts clean: a session-level ``SET ROLE``
+    or ``set_config(..., false)`` left by earlier work on this connection (the
+    application only ever sets them for one transaction) never reaches the
+    next request."""
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("RESET ROLE")
+        cursor.execute("RESET ALL")
+    finally:
+        cursor.close()
+    dbapi_connection.commit()
 
 
 def reset_engine() -> None:

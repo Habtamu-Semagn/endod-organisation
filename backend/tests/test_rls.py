@@ -484,3 +484,28 @@ def test_a_portal_request_reads_only_its_own_organisation(client, clock, orgs):
     ids = {e["id"] for e in listed.json()["items"]}
     assert ids == {mine["id"]}
     assert portal.get(f"/employees/{orgs[1]['employee']}").status_code == 404
+
+
+@pytest.mark.parametrize("leftover", [
+    "SET ROLE org_platform",
+    "SET SESSION ROLE org_platform",
+    "SELECT set_config('app.organisation_id', :org, false)",
+])
+def test_session_level_state_never_survives_into_the_next_checkout(orgs, leftover):
+    """The application only sets its context for one transaction; anything set
+    for the whole session is reset when the connection next leaves the pool."""
+    from app import db as dbmod
+
+    dbmod.reset_engine()
+    engine = dbmod.get_engine()
+    with engine.connect() as connection:
+        pid = connection.execute(text("SELECT pg_backend_pid()")).scalar()
+        connection.execute(text(leftover), {"org": orgs[1]["organisation"]})
+        connection.commit()
+        assert connection.execute(text("SELECT count(*) FROM organisations")).scalar() >= 1
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT pg_backend_pid()")).scalar() == pid  # the same pooled connection
+        assert connection.execute(text("SELECT current_user")).scalar() == "org_app"
+        assert connection.execute(text("SELECT coalesce(current_setting('app.organisation_id', true), '')")).scalar() \
+            == ""
+        assert connection.execute(text("SELECT count(*) FROM organisations")).scalar() == 0
