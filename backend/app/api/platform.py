@@ -141,9 +141,8 @@ def _locked(session, application_id: str):
 def list_applications(status: Optional[str] = Query(default=None)) -> Dict[str, List[Dict[str, Any]]]:
     if status is not None and status not in ApplicationStatus.ALL:
         raise ApiError(400, f"status must be one of {', '.join(ApplicationStatus.ALL)}.", "VALIDATION_ERROR")
-    with platform_session() as session:
-        # No worker runs here: expired drafts go when Endod looks (and on applying or signing in).
-        onboarding.sweep_expired_drafts(session)
+    # Expired drafts go when Endod looks too (at most once per ORG_SWEEP_INTERVAL_SECONDS).
+    onboarding.sweep_now()
     with platform_session() as session:
         query = select(OrganisationApplication).order_by(
             func.coalesce(OrganisationApplication.submitted_at, OrganisationApplication.created_at).desc(),

@@ -81,6 +81,8 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("SITE_ORIGIN", "https://organisation.example")
     monkeypatch.setenv("BFF_SHARED_SECRET", BFF_SECRET)
     monkeypatch.setenv("ORG_RECEIPTS_DIR", str(tmp_path / "receipts"))
+    # Expired drafts: every platform list sweeps (no interval) in the tests.
+    monkeypatch.setenv("ORG_SWEEP_INTERVAL_SECONDS", "0")
     dbmod.reset_engine()
     if url.startswith("postgresql"):
         _empty_postgres(monkeypatch, url)

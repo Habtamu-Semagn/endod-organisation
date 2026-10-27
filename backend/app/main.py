@@ -13,8 +13,10 @@ secret; the BFF never passes those paths on.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -24,8 +26,11 @@ from starlette.exceptions import HTTPException
 from app.api import (
     application, auth, batches, claims, employees, overview, platform, receipts, reports, settings as settings_api,
 )
+from app import onboarding
 from app.config import Settings, get_settings
+from app.db import check_connection_role
 from app.errors import ApiError
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger("organisation")
 
@@ -35,7 +40,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Fail at start, not at the first sign-in, when the secret is missing in production.
     settings.session_secret()
     bff_secret = settings.bff_secret().encode()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Row-level security must hold the API's own database role (app.db).
+        await run_in_threadpool(check_connection_role)
+        sweeper = asyncio.create_task(_sweep_forever()) if settings.ORG_SWEEP_INTERVAL_SECONDS > 0 else None
+        try:
+            yield
+        finally:
+            if sweeper is not None:
+                sweeper.cancel()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="TenaCare Organisation Portal",
         version="0.1.0",
         docs_url=None if settings.is_production else "/docs",
@@ -102,6 +120,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(application.router)
     app.include_router(platform.router)
     return app
+
+
+async def _sweep_forever() -> None:
+    """The expired-draft sweep, in the background (app.onboarding.sweep_now)."""
+    while True:
+        await asyncio.sleep(max(get_settings().ORG_SWEEP_INTERVAL_SECONDS, 1))
+        try:
+            await run_in_threadpool(onboarding.sweep_now)
+        except Exception:  # noqa: BLE001  (logged; the next round tries again)
+            logger.exception("draft_sweep_failed")
 
 
 def _is_platform(request: Request) -> bool:

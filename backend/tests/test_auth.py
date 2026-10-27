@@ -60,7 +60,7 @@ def test_wrong_email_and_wrong_password_answer_the_same(client):
     failures = events("sign_in")
     assert len(failures) == 5 and all(result == "failure" for _, result, *_ in failures)
     reasons = [json.loads(f[4])["reason"] for f in failures]
-    assert reasons == ["unknown_email", "wrong_password", "account_disabled", "not_enrolled", "not_enrolled"]
+    assert reasons == ["unknown_email", "wrong_password", "unknown_email", "not_enrolled", "not_enrolled"]  # disabled: not looked up
 
 
 def test_unknown_emails_are_logged_only_as_a_keyed_hash(client):

@@ -59,7 +59,7 @@ from sqlalchemy import delete, func, select, update
 
 from app import audit, rls, security, totp
 from app.config import Settings, get_settings
-from app.db import bind_tenant, ensure_aware, iso, platform_session, session_scope, tenant_session, utcnow
+from app.db import bind_tenant, ensure_aware, iso, session_scope, tenant_session, utcnow
 from app.errors import ApiError
 from app.models import (
     AdminSession, ApplicationStatus, AuditResult, AuthFailure, LoginThrottle, OrgAdmin, Organisation,
@@ -355,11 +355,7 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
     now = utcnow()
     email = _normal_email(email)
     failure: Optional[ApiError] = None
-    # A draft nobody submitted in time is deleted before anyone signs in to it
-    # (the sweep acts across organisations: the platform scope, its own transaction).
     from app import onboarding
-    with platform_session() as session:
-        onboarding.sweep_expired_drafts(session, now)
     # Nobody's yet: the email names the organisation (one SECURITY DEFINER look-up, app.rls).
     with session_scope() as session:
         if _ip_blocked(session, ip, now, settings):
@@ -371,7 +367,8 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
             organisation_id = rls.admin_organisation(session, email)
             if organisation_id is not None:
                 bind_tenant(session, organisation_id)
-            found = session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email))
+            # Only an active admin is looked up at all (the same on SQLite as under row-level security).
+            found = session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email)) if organisation_id else None
             admin = _locked_admin(session, found) if found else None
             reason: Optional[str] = None
             counted = False
@@ -387,6 +384,10 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
                     reason = "account_disabled"
                 elif not _organisation_active(session, admin.organisation_id):
                     reason = "organisation_suspended"
+                elif onboarding.expired(onboarding.application_of(session, admin.organisation_id), now):
+                    # A draft nobody submitted in time: never signed in to again; the
+                    # periodic sweep deletes it (app.onboarding.sweep_now).
+                    reason = "application_expired"
                 elif not admin.totp_secret:
                     applying = _applying(session, admin.organisation_id)
                     approved_applicant = not applying and _approved_applicant(session, admin)

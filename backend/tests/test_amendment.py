@@ -147,8 +147,8 @@ def test_drafts_not_submitted_within_14_days_are_deleted_with_everything(client,
     _age(young.org_id, 13)
     assert (tmp_path / "receipts" / old.org_id).is_dir()
 
-    # Starting any application sweeps (there is no worker in this deployment).
-    assert start_application(client).status_code == 200
+    # The periodic sweep (the API's background task, the platform list, the CLI).
+    assert onboarding.sweep_now(force=True) == 1
 
     with platform_session() as session:
         assert session.get(Organisation, old.org_id) is None
@@ -173,7 +173,7 @@ def test_drafts_not_submitted_within_14_days_are_deleted_with_everything(client,
     assert start_application(client, email="old@company.example").status_code == 200
 
 
-def test_listing_applications_and_signing_in_also_sweep(client, clock, platform_key):
+def test_listing_applications_sweeps_and_signing_in_is_refused_without_sweeping(client, clock, platform_key):
     listed = Applicant(client, clock)
     _age(listed.org_id, 15)
     items = client.get("/platform/applications", headers=platform_key).json()["items"]
@@ -183,7 +183,42 @@ def test_listing_applications_and_signing_in_also_sweep(client, clock, platform_
     _age(signing_in.org_id, 15)
     resp = client.post("/auth/login", json={"email": "late@company.example", "password": PASSWORD})
     assert resp.status_code == 401 and resp.json()["error"] == "Incorrect email or password."
+    assert json.loads(events("sign_in")[-1][4])["reason"] == "application_expired"
+    # A public request never sweeps (anyone could make it lock rows on demand).
+    assert len(events("application_expired")) == 1
+    with platform_session() as session:
+        assert session.get(Organisation, signing_in.org_id) is not None
+    assert onboarding.sweep_now(force=True) == 1
     assert len(events("application_expired")) == 2
+
+
+def test_starting_an_application_sweeps_only_the_expired_draft_of_its_email(client, clock):
+    mine = Applicant(client, clock, email="again@company.example")
+    other = Applicant(client, clock)
+    for applicant in (mine, other):
+        _age(applicant.org_id, 15)
+    assert start_application(client, email="again@company.example").status_code == 200
+    with platform_session() as session:
+        assert session.get(Organisation, mine.org_id) is None
+        assert session.get(Organisation, other.org_id) is not None
+
+
+def test_the_sweep_runs_at_most_once_per_interval_and_one_at_a_time(db, monkeypatch):
+    monkeypatch.setenv("ORG_SWEEP_INTERVAL_SECONDS", "600")
+    monkeypatch.setattr(onboarding, "_last_sweep", None)
+    assert onboarding.sweep_now() == 0
+    assert onboarding.sweep_now() is None  # within the interval
+    assert onboarding.sweep_now(force=True) == 0
+
+
+def test_a_rate_limited_application_never_sweeps(client, clock, monkeypatch):
+    late = Applicant(client, clock, email="limited@company.example")
+    _age(late.org_id, 15)
+    monkeypatch.setenv("ORG_APPLICATIONS_PER_IP", "1")
+    resp = start_application(client, email="limited@company.example")
+    assert resp.status_code == 429
+    with platform_session() as session:
+        assert session.get(Organisation, late.org_id) is not None
 
 
 def test_a_rejected_application_is_not_swept(client, clock, platform_key):

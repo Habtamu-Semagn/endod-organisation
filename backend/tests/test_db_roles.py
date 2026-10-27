@@ -46,16 +46,25 @@ def test_the_app_role_reads_and_writes_the_app_tables(app_conn):
 
 
 def test_the_app_role_can_only_append_to_the_audit_log(app_conn):
+    row_id = uuid.uuid4().hex
     with app_conn.begin():
-        app_conn.execute(text("INSERT INTO audit_events (id, at, action, result) VALUES (:id, now(), 'sign_in', 'success')"),
-                         {"id": uuid.uuid4().hex})
-        # An event without an organisation is read only in the platform scope (migration 0004).
-        assert app_conn.execute(text("SELECT count(*) FROM audit_events")).scalar() == 0
-        app_conn.execute(text("SELECT set_config('app.scope', 'platform', true)"))
+        # A tenant appends its own organisation's events (row-level security, migration 0004).
+        app_conn.execute(text("SELECT set_config('app.organisation_id', :o, true)"), {"o": row_id})
+        app_conn.execute(text("INSERT INTO audit_events (id, at, organisation_id, action, result) "
+                              "VALUES (:id, now(), :o, 'sign_in', 'success')"), {"id": uuid.uuid4().hex, "o": row_id})
+        assert app_conn.execute(text("SELECT count(*) FROM audit_events")).scalar() == 1
+    with app_conn.begin():
+        # The platform role reads every event.
+        app_conn.execute(text("SET LOCAL ROLE org_platform"))
         assert app_conn.execute(text("SELECT count(*) FROM audit_events")).scalar() >= 1
     _refused(app_conn, "UPDATE audit_events SET result = 'failure'")
     _refused(app_conn, "DELETE FROM audit_events")
     _refused(app_conn, "TRUNCATE audit_events")
+    for statement in ("UPDATE audit_events SET result = 'failure'", "DELETE FROM audit_events"):
+        with pytest.raises(ProgrammingError):
+            with app_conn.begin():
+                app_conn.execute(text("SET LOCAL ROLE org_platform"))
+                app_conn.execute(text(statement))
 
 
 def test_the_app_role_cannot_bypass_row_level_security(app_conn):

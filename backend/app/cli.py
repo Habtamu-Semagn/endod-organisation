@@ -19,6 +19,7 @@ admin has enrolled, signing in with the password alone is refused:
     python -m app.cli disable --email hr@example.et     # signs them out everywhere
     python -m app.cli list-orgs
     python -m app.cli list-admins [--org <organisation id>]
+    python -m app.cli sweep-drafts                      # delete expired drafts now (cron; the API also does it)
 """
 
 from __future__ import annotations
@@ -195,6 +196,7 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None, stdout: Tex
         cmd = commands.add_parser(name, help=help_text)
         cmd.add_argument("--email", required=True)
     commands.add_parser("list-orgs", help="list organisations")
+    commands.add_parser("sweep-drafts", help="delete company drafts not submitted in time (prints how many)")
     admins = commands.add_parser("list-admins", help="list admins")
     admins.add_argument("--org", help="only this organisation's")
     args = parser.parse_args(argv)
@@ -230,6 +232,13 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None, stdout: Tex
         return 0
     if args.command == "list-orgs":
         list_orgs(stdout)
+        return 0
+    if args.command == "sweep-drafts":
+        from app import onboarding
+
+        swept = onboarding.sweep_now(force=True)
+        print("Another sweep is running; nothing done." if swept is None else f"{swept} expired draft(s) deleted.",
+              file=stdout)
         return 0
     if args.command == "list-admins":
         list_admins(stdout, args.org)

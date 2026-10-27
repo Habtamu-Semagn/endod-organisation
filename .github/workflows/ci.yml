@@ -35,6 +35,19 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Tests (SQLite)
         run: python -m pytest -q
+      - name: Database roles (deploy/postgres-init; the platform role script twice, as it is idempotent)
+        env:
+          PGHOST: localhost
+          PGPASSWORD: ci-only
+          POSTGRES_USER: organisation
+          POSTGRES_DB: organisation_roles
+          ORG_OWNER_PASSWORD: owner-ci
+          ORG_APP_PASSWORD: app-ci
+        run: |
+          psql -U organisation -d organisation -v ON_ERROR_STOP=1 -c "CREATE DATABASE organisation_roles"
+          sh ../deploy/postgres-init/10-roles.sh
+          sh ../deploy/postgres-init/20-platform-role.sh
+          sh ../deploy/postgres-init/20-platform-role.sh
       - name: Migrations apply on PostgreSQL and match the models
         env:
           ORG_DATABASE_URL: postgresql+psycopg://organisation:ci-only@localhost:5432/organisation
@@ -50,18 +63,11 @@ jobs:
           python -m app.cli create-admin --org "$ORG_ID" --email link@tena.example --name "Link Admin" | grep -q '/setup#'
           python -m app.cli list-orgs
           python -m app.cli list-admins
-      - name: Database roles and row-level security on an existing database (0003 with data, then 0004, down and up)
+      - name: Row-level security on an existing database (0003 with data, then head, down and up)
         env:
           PGHOST: localhost
-          PGPASSWORD: ci-only
-          POSTGRES_USER: organisation
-          POSTGRES_DB: organisation_roles
-          ORG_OWNER_PASSWORD: owner-ci
-          ORG_APP_PASSWORD: app-ci
           OWNER_URL: postgresql+psycopg://org_owner:owner-ci@localhost:5432/organisation_roles
         run: |
-          psql -U organisation -d organisation -v ON_ERROR_STOP=1 -c "CREATE DATABASE organisation_roles"
-          sh ../deploy/postgres-init/10-roles.sh
           # As production is today: at 0003, with two suspended organisations and an admin.
           ORG_DATABASE_URL=$OWNER_URL alembic upgrade 0003
           PGPASSWORD=owner-ci psql -U org_owner -d organisation_roles -v ON_ERROR_STOP=1 -c "
@@ -69,14 +75,19 @@ jobs:
             VALUES ('c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1', 'Test One', '0000000101', 'suspended', 'cbe', 1, 1, now()),
                    ('c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2', 'Test Two', '0000000102', 'suspended', 'cbe', 1, 1, now());
             INSERT INTO org_admins (id, organisation_id, email, name, active, failed_attempts, code_failures, created_at)
-            VALUES ('a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', 'c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1', 'one@test.example', 'One', true, 0, 0, now());"
+            VALUES ('a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', 'c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1', 'one@test.example', 'One', true, 0, 0, now());
+            INSERT INTO employees (id, organisation_id, employee_number, name, phone, department, active, created_at, updated_at)
+            VALUES ('e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1', 'c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1', 'E1', 'Employee', '+251911000001', 'Ops', true, now(), now());"
           ORG_DATABASE_URL=$OWNER_URL alembic upgrade head
           as_app() { PGPASSWORD=app-ci psql -U org_app -d organisation_roles -v ON_ERROR_STOP=1 -tAc "$1"; }
-          # No tenant: nothing. The platform scope: both. One organisation: its own admin only.
+          # No tenant: nothing. A setting opens nothing; the platform role: both. One organisation: its own admin only.
           test "$(as_app 'SELECT count(*) FROM organisations')" = 0
-          test "$(PGOPTIONS='-c app.scope=platform' as_app 'SELECT count(*) FROM organisations')" = 2
+          test "$(PGOPTIONS='-c app.scope=platform' as_app 'SELECT count(*) FROM organisations')" = 0
+          test "$(PGOPTIONS='-c role=org_platform' as_app 'SELECT count(*) FROM organisations')" = 2
           test "$(PGOPTIONS='-c app.organisation_id=c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1' as_app 'SELECT count(*) FROM org_admins')" = 1
           test "$(PGOPTIONS='-c app.organisation_id=c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2' as_app 'SELECT count(*) FROM org_admins')" = 0
+          # A reference across organisations is refused even to the platform role (0005).
+          if PGOPTIONS='-c role=org_platform' as_app "INSERT INTO dependants (id, organisation_id, employee_id, name, relationship, active, created_at) VALUES ('d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2', 'c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2', 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1', 'Cross', 'child', true, now())"; then exit 1; fi
           # Down (row-level security off, the data intact) and up again.
           ORG_DATABASE_URL=$OWNER_URL alembic downgrade 0003
           test "$(as_app 'SELECT count(*) FROM organisations')" = 2

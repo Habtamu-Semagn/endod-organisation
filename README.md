@@ -68,16 +68,35 @@ The design follows the Endod super admin service (`endod-superadmin`).
   organisation (`app/tenancy.py`). An id from another organisation answers `404 Not found.`,
   exactly like an id that does not exist. `backend/tests/test_tenancy.py` tries every
   route that takes an id with another organisation's ids.
-- **Row-level security** (PostgreSQL, migration 0004): a second wall in the database.
-  Every organisation-scoped table has ENABLE and FORCE ROW LEVEL SECURITY and a policy
-  that shows and accepts only the rows of the organisation the transaction acts for
-  (`app.organisation_id`, set at the start of every transaction by `app/db.py`), or every
-  row in the platform scope (`app.scope = 'platform'`: the `/platform` routes, the
-  expired-draft sweep and the CLI, through `platform_session()` only). With neither set,
-  a table shows nothing and takes nothing. Sign-in, session tokens, setup links and a new
-  application learn their organisation from one narrow SECURITY DEFINER function each
-  (`app/rls.py`). `org_app` is neither a superuser nor BYPASSRLS (migrations refuse to
-  run otherwise); `backend/tests/test_rls.py` checks every policy table.
+- **Row-level security** (PostgreSQL, migrations 0004 and 0005): a second wall in the
+  database. Every organisation-scoped table has ENABLE and FORCE ROW LEVEL SECURITY and a
+  policy that shows and accepts only the rows of the organisation the transaction acts
+  for (`app.organisation_id`, set at the start of every transaction by `app/db.py`). With
+  none set, a table shows nothing and takes nothing. Only the NOLOGIN role `org_platform`
+  has a policy over every row: `platform_session()` (the `/platform` routes, the
+  expired-draft sweep, the CLI) runs `SET LOCAL ROLE org_platform`; `org_app` is its
+  member WITH INHERIT FALSE, so nothing else it runs gets those rows, and no setting
+  (`app.scope` or any other) opens them. Sign-in, session tokens and setup links learn
+  their organisation from one SECURITY DEFINER function each, which answers only for a
+  live key (an active admin, a session neither revoked nor expired, an unused unexpired
+  link); whether an email or a TIN is taken is a yes or no (`app/rls.py`). A tenant
+  appends only its own organisation's audit events; one of no organisation goes through
+  one more such function. Composite foreign keys on `(organisation_id, id)` make a claim,
+  dependant, policy override or application contact point only at rows of its own
+  organisation. Migrations stop unless `org_app` and `org_platform` exist and neither is a
+  superuser or BYPASSRLS; the API refuses to start if its role is a superuser, BYPASSRLS,
+  owns the tables or inherits `org_platform`. `backend/tests/test_rls.py` and
+  `test_same_org_keys.py` check every policy table and key.
+
+  **What remains**: the wall is against a query that forgets its filter, not against SQL
+  injection. Any SQL the API runs as `org_app` can still `SET ROLE org_platform`, or set
+  `app.organisation_id` to another organisation's id, so injection is as serious as
+  before and every query stays parameterised. A secret checked by a SECURITY DEFINER
+  function before the platform scope opens was considered and not done: injected SQL
+  could still switch to any organisation whose id it learns through the tenant setting,
+  so closing the gap properly means signing the tenant context too (an HMAC of the
+  organisation id with a key only the API holds, verified in every policy), with that key
+  shared by the API and the migrations. That is a larger change, left for later.
 - **Sign-in**: argon2id passwords and mandatory TOTP (Google Authenticator) with replay
   protection. Admins enrol through one-time setup links; there are 10 recovery codes.
   A company's applicant uses the password only until Endod approves the company; approval
@@ -116,9 +135,13 @@ The design follows the Endod super admin service (`endod-superadmin`).
 - **Audit log**: every sign-in step and every change (with the organisation, admin, address,
   target and result) goes to `audit_events`, which the API's database role can only read
   and append to.
-- **Database roles**: `org_owner` runs the migrations (in the platform scope, since the
-  policies are forced on the owner too); the API connects as `org_app` (no DDL;
-  `audit_events` is SELECT/INSERT only; held to the row-level security policies).
+- **Database roles** (`deploy/postgres-init`): `org_owner` runs the migrations (in its own
+  maintenance scope, since the policies are forced on the owner too); the API connects
+  as `org_app` (no DDL; `audit_events` is SELECT/INSERT only; held to the row-level
+  security policies); `org_platform` (NOLOGIN) is what the platform scope runs as.
+- **Expired drafts** are swept by a background task of the API and when Endod lists
+  applications, at most once per `ORG_SWEEP_INTERVAL_SECONDS` and one sweep at a time
+  (an advisory lock), or by `python -m app.cli sweep-drafts`; never on a public request.
 - **Money** is always an integer number of santim (1 ETB = 100 santim). There are no
   floats, in the API or in the web app.
 - **Receipt files**: PDF, JPEG, PNG or WebP, recognised by their first bytes, at most

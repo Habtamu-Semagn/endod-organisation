@@ -157,7 +157,7 @@ def test_approval_revokes_every_session_of_the_organisations_admins_and_audits_i
     assert approve_application(client, platform_key, a.org_id).status_code == 200
     for headers in (a.headers, second, other, pending):
         resp = client.get("/auth/me", headers=headers)
-        assert resp.status_code == 401 and resp.json()["error_code"] == "SESSION_ENDED"
+        assert resp.status_code == 401 and resp.json()["error_code"] == "AUTH_REQUIRED"  # revoked: names no organisation
     # Other organisations' sessions are untouched.
     assert elsewhere.get("/application").status_code == 200
     assert portal.get("/overview").status_code == 200

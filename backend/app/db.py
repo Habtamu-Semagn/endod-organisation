@@ -12,9 +12,11 @@ never carries it over to the next user):
 
 * ``tenant_session(organisation_id)``: a signed-in admin's request
   (``app.organisation_id``); the portal routes use only this;
-* ``platform_session()``: Endod acting across organisations (``app.scope =
-  'platform'``): the /platform routes, the expired-draft sweep and the CLI.
-  It is the only way the application sets that scope;
+* ``platform_session()``: Endod acting across organisations: the /platform
+  routes, the expired-draft sweep and the CLI. Its transactions run ``SET
+  LOCAL ROLE org_platform``, the only role with a policy over every row (the
+  app role is a member WITH INHERIT FALSE, so nothing else gets it). No
+  setting gives that scope;
 * ``session_scope()``: nobody yet (sign-in, setup links, a new application):
   every tenant table answers no rows and refuses every write until
   ``bind_tenant`` names the organisation, which sign-in learns from one narrow
@@ -117,18 +119,20 @@ def reset_engine() -> None:
 #: Keys of ``Session.info``: the organisation a session acts for, or the platform scope.
 TENANT_KEY = "rls_organisation_id"
 PLATFORM_KEY = "rls_platform"
-PLATFORM_SCOPE = "platform"
+#: The NOLOGIN role whose policies cover every organisation (deploy/postgres-init/20-platform-role.sh).
+PLATFORM_ROLE = "org_platform"
 
-_SET_CONTEXT = text("SELECT set_config('app.organisation_id', :org, true), set_config('app.scope', :scope, true)")
+_SET_TENANT = text("SELECT set_config('app.organisation_id', :org, true)")
+_SET_PLATFORM = text(f"SET LOCAL ROLE {PLATFORM_ROLE}")
 
 
 def _apply_context(session: Session, connection) -> None:
     if connection.dialect.name != "postgresql":
         return
-    connection.execute(_SET_CONTEXT, {
-        "org": session.info.get(TENANT_KEY) or "",
-        "scope": PLATFORM_SCOPE if session.info.get(PLATFORM_KEY) else "",
-    })
+    if session.info.get(PLATFORM_KEY):
+        connection.execute(_SET_PLATFORM)
+    else:
+        connection.execute(_SET_TENANT, {"org": session.info.get(TENANT_KEY) or ""})
 
 
 @event.listens_for(Session, "after_begin")
@@ -197,3 +201,40 @@ def create_all() -> None:
     from app import models  # noqa: F401  (registers the tables)
 
     Base.metadata.create_all(get_engine())
+
+
+def connection_role_problem(connection) -> Optional[str]:
+    """Why the API must not run as the role ``connection`` uses, or None.
+
+    Row-level security holds only a role that is neither a superuser nor
+    BYPASSRLS, does not own (or inherit an owner of) the tables, and does not
+    inherit the platform role. PostgreSQL only."""
+    row = connection.execute(text(
+        "SELECT r.rolsuper, r.rolbypassrls, "
+        "EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' "
+        "        AND pg_has_role(r.oid, c.relowner, 'USAGE')), "
+        "EXISTS (SELECT 1 FROM pg_roles p WHERE p.rolname = :platform AND pg_has_role(r.oid, p.oid, 'USAGE')) "
+        "FROM pg_roles r WHERE r.rolname = current_user"), {"platform": PLATFORM_ROLE}).one()
+    superuser, bypass, owner, platform = row
+    if superuser:
+        return "is a superuser"
+    if bypass:
+        return "has BYPASSRLS"
+    if owner:
+        return "owns the tables"
+    if platform:
+        return f"inherits {PLATFORM_ROLE} (grant it WITH INHERIT FALSE)"
+    return None
+
+
+def check_connection_role() -> None:
+    """Refuse to serve when row-level security would not hold the API's
+    database role (app.main, at start-up). Nothing to check on SQLite."""
+    engine = get_engine()
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.connect() as connection:
+        problem = connection_role_problem(connection)
+    if problem:
+        raise RuntimeError(f"The API's database role {problem}: row-level security would not apply to it. "
+                           "Connect as the app role (org_app).")

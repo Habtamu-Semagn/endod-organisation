@@ -281,11 +281,11 @@ def test_a_session_binds_one_organisation_only(orgs):
 
 def test_the_look_up_functions_answer_one_thing_and_leave_no_scope_behind(orgs):
     """Sign-in, session tokens and setup links learn their organisation from
-    SECURITY DEFINER functions: one id (or yes/no) for one key, and afterwards
-    the caller still sees nothing."""
+    SECURITY DEFINER functions: one id for one live key (or a yes/no), and
+    afterwards the caller still sees nothing."""
     from app import rls
-    from app.db import platform_session, session_scope
-    from app.models import AdminSession, Organisation, SetupToken
+    from app.db import platform_session, session_scope, utcnow
+    from app.models import AdminSession, Organisation, OrgAdmin, SetupToken
 
     a, b = orgs
     with platform_session() as session:
@@ -298,23 +298,155 @@ def test_the_look_up_functions_answer_one_thing_and_leave_no_scope_behind(orgs):
         assert rls.session_organisation(session, session_hash) == b["organisation"]
         assert rls.session_organisation(session, _hex()) is None
         assert rls.setup_link_organisation(session, link_hash) == b["organisation"]
+        assert rls.email_taken(session, "beta@rls.example") is True
+        assert rls.email_taken(session, "nobody@rls.example") is False
         assert rls.tin_taken(session, b_tin, a["organisation"]) is True
         assert rls.tin_taken(session, b_tin, b["organisation"]) is False
         assert rls.tin_taken(session, "0000000000", a["organisation"]) is False
         assert session.scalar(text("SELECT coalesce(current_setting('app.scope', true), '')")) == ""
         assert session.scalar(select(func.count()).select_from(AdminSession)) == 0
 
+    # Only live keys: a revoked or expired session, a used or expired link answer nothing.
+    past = utcnow() - timedelta(minutes=1)
+    for model, column, lookup, key in (
+        (AdminSession, "revoked_at", rls.session_organisation, session_hash),
+        (AdminSession, "expires_at", rls.session_organisation, session_hash),
+        (SetupToken, "used_at", rls.setup_link_organisation, link_hash),
+        (SetupToken, "expires_at", rls.setup_link_organisation, link_hash),
+    ):
+        with platform_session() as session:
+            row = session.scalar(select(model).where(model.token_hash == key))
+            saved = getattr(row, column)
+            setattr(row, column, past)
+        with session_scope() as session:
+            assert lookup(session, key) is None, (model.__name__, column)
+        with platform_session() as session:
+            setattr(session.scalar(select(model).where(model.token_hash == key)), column, saved)
+    # A disabled admin is not looked up (the email stays taken).
+    with platform_session() as session:
+        session.get(OrgAdmin, b["admin"]).active = False
+    with session_scope() as session:
+        assert rls.admin_organisation(session, "beta@rls.example") is None
+        assert rls.email_taken(session, "beta@rls.example") is True
+
 
 def test_the_app_role_cannot_call_anything_else_as_the_owner(db):
-    """Only the four look-ups are SECURITY DEFINER, and PUBLIC cannot execute them."""
+    """Only these functions are SECURITY DEFINER, and PUBLIC cannot execute them."""
     from app.db import get_engine
 
     with get_engine().connect() as connection:
         rows = connection.execute(text(
             "SELECT p.proname, has_function_privilege('public', p.oid, 'EXECUTE') FROM pg_proc p "
             "WHERE p.prosecdef AND p.pronamespace = 'public'::regnamespace ORDER BY 1")).all()
-    assert [tuple(r) for r in rows] == [("rls_admin_organisation", False), ("rls_session_organisation", False),
-                                        ("rls_setup_link_organisation", False), ("rls_tin_taken", False)]
+    assert [tuple(r) for r in rows] == [
+        ("rls_admin_organisation", False), ("rls_email_taken", False), ("rls_record_orgless_event", False),
+        ("rls_session_organisation", False), ("rls_setup_link_organisation", False), ("rls_tin_taken", False)]
+
+
+@pytest.mark.parametrize("scope", ["platform", "maintenance"])
+def test_no_setting_opens_the_platform_scope(orgs, scope):
+    """Only the org_platform role (SET ROLE) sees every organisation; setting
+    app.scope as the app role, with or without a tenant, gives nothing more."""
+    from app.db import get_engine, session_scope, tenant_session
+
+    a, b = orgs
+    with get_engine().connect() as connection:
+        connection.execute(text("SELECT set_config('app.scope', :s, false)"), {"s": scope})
+        for table in OWNED_BY:
+            assert connection.execute(text(f'SELECT count(*) FROM "{table}"')).scalar() == 0, table
+        connection.execute(text("RESET app.scope"))
+        connection.commit()
+    with session_scope() as session:
+        session.execute(text("SELECT set_config('app.scope', :s, true)"), {"s": scope})
+        assert _count(session, "organisations") == 0
+    with tenant_session(a["organisation"]) as session:
+        session.execute(text("SELECT set_config('app.scope', :s, true)"), {"s": scope})
+        for table in OWNED_BY:
+            assert _count(session, table, OWNED_BY[table], b) == 0, table
+
+
+def test_the_platform_scope_is_the_platform_role_and_only_when_set(orgs):
+    from app.db import get_engine, platform_session, tenant_session
+
+    with platform_session() as session:
+        assert session.scalar(text("SELECT current_user")) == "org_platform"
+    with tenant_session(orgs[0]["organisation"]) as session:
+        assert session.scalar(text("SELECT current_user")) == "org_app"
+        # A member WITH INHERIT FALSE: none of org_platform's rights without SET ROLE.
+        assert session.scalar(text("SELECT pg_has_role(current_user, 'org_platform', 'USAGE')")) is False
+        assert session.scalar(text("SELECT pg_has_role(current_user, 'org_platform', 'MEMBER')")) is True
+    with get_engine().connect() as connection:
+        assert connection.execute(text("SELECT current_user")).scalar() == "org_app"
+
+
+def test_a_tenant_appends_only_its_own_organisations_events(orgs):
+    from app import audit
+    from app.db import platform_session, session_scope, tenant_session
+    from app.models import AuditEvent
+
+    a, b = orgs
+    for organisation_id in (None, b["organisation"]):
+        with pytest.raises(DBAPIError) as caught:
+            with tenant_session(a["organisation"]) as session:
+                session.add(AuditEvent(action="sign_in", result="success", organisation_id=organisation_id))
+                session.flush()
+        assert "row-level security" in str(caught.value.orig)
+    with pytest.raises(DBAPIError):
+        with session_scope() as session:
+            session.add(AuditEvent(action="sign_in", result="failure", organisation_id=None))
+            session.flush()
+    with tenant_session(a["organisation"]) as session:
+        session.add(AuditEvent(action="sign_in", result="success", organisation_id=a["organisation"]))
+    # An event of no organisation goes through the one function, which always leaves it org-less.
+    with session_scope() as session:
+        audit.record(session, audit.SIGN_IN, "failure", admin_email="hash", ip="203.0.113.1",
+                     detail={"reason": "unknown_email"})
+    with platform_session() as session:
+        orgless = session.scalars(select(AuditEvent).where(AuditEvent.organisation_id.is_(None))).all()
+        assert [(e.action, e.admin_id, e.ip) for e in orgless] == [("sign_in", None, "203.0.113.1")]
+        session.add(AuditEvent(action="sign_in", result="success", organisation_id=None))  # the platform may
+
+
+def test_the_api_refuses_to_start_as_a_role_rls_does_not_hold(orgs, monkeypatch):
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+
+    from app import db as dbmod
+    from app.main import create_app
+
+    with dbmod.get_engine().connect() as connection:
+        assert dbmod.connection_role_problem(connection) is None
+    dbmod.check_connection_role()  # the app role: fine
+    owner_url = os.environ.get("ORG_TEST_OWNER_DATABASE_URL")
+    if not owner_url:
+        pytest.skip("needs ORG_TEST_OWNER_DATABASE_URL")
+    engine = create_engine(owner_url)
+    with engine.connect() as connection:
+        assert dbmod.connection_role_problem(connection) == "owns the tables"
+    engine.dispose()
+    monkeypatch.setenv("ORG_DATABASE_URL", owner_url)
+    dbmod.reset_engine()
+    with pytest.raises(RuntimeError, match="owns the tables"):
+        with TestClient(create_app()):
+            pass
+    dbmod.reset_engine()
+
+
+def test_migrations_stop_without_the_roles(orgs, monkeypatch):
+    from alembic import command
+
+    from app import db as dbmod
+    from test_migrations import _config
+
+    owner_url = os.environ.get("ORG_TEST_OWNER_DATABASE_URL")
+    if not owner_url:
+        pytest.skip("needs ORG_TEST_OWNER_DATABASE_URL")
+    monkeypatch.setenv("ORG_DATABASE_URL", owner_url)
+    monkeypatch.setenv("ORG_APP_ROLE", "no_such_role")
+    dbmod.reset_engine()
+    with pytest.raises(RuntimeError, match="does not exist"):
+        command.upgrade(_config(), "head")
+    dbmod.reset_engine()
 
 
 def test_the_platform_routes_see_every_organisation(client, orgs, monkeypatch):

@@ -91,20 +91,27 @@ def start(body: StartRequest, request: Request, ip: str = Depends(auth.client_ip
     settings = get_settings()
     now = utcnow()
     failure: Optional[ApiError] = None
-    # Drafts nobody submitted in time go first (their emails become free again):
-    # across organisations, so in the platform scope and its own transaction.
-    with platform_session() as session:
-        onboarding.sweep_expired_drafts(session, now)
+    # Nobody's yet: the rate limits first; whether the email is taken is one
+    # SECURITY DEFINER look-up (app.rls, a yes or no).
+    with session_scope() as session:
+        if auth.ip_blocked(session, ip, now, settings) or auth.application_limited(session, ip, now, settings):
+            audit.record(session, audit.APPLICATION_STARTED, AuditResult.FAILURE, ip=ip,
+                         admin_email=security.email_fingerprint(email), detail={"reason": "address_rate_limited"})
+            failure = ApiError(429, TOO_MANY_APPLICATIONS, "RATE_LIMITED")
+        taken = failure is None and rls.email_taken(session, email)
+    if failure is not None:
+        raise failure
+    if taken:
+        # A draft of this email nobody submitted in time goes first (the email is
+        # free again): only that one, past the rate limits (app.onboarding.sweep_now
+        # does the rest, never on a public request).
+        with platform_session() as session:
+            onboarding.sweep_expired_drafts(session, now, email=email)
     try:
-        # Nobody's yet: whether the email is taken is one SECURITY DEFINER look-up
-        # (app.rls); the new organisation's id is chosen here and bound before
-        # anything is written, so this session can write that organisation only.
+        # The new organisation's id is chosen here and bound before anything is
+        # written, so this session can write that organisation only.
         with session_scope() as session:
-            if auth.ip_blocked(session, ip, now, settings) or auth.application_limited(session, ip, now, settings):
-                audit.record(session, audit.APPLICATION_STARTED, AuditResult.FAILURE, ip=ip,
-                             admin_email=security.email_fingerprint(email), detail={"reason": "address_rate_limited"})
-                failure = ApiError(429, TOO_MANY_APPLICATIONS, "RATE_LIMITED")
-            elif rls.admin_organisation(session, email) is not None:
+            if rls.email_taken(session, email):
                 # Probing for accounts costs an attempt, like an application and a failed sign-in.
                 auth.note_ip_failure(session, ip, now)
                 auth.note_application(session, ip, now)
