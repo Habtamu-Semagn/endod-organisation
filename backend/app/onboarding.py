@@ -5,8 +5,11 @@ The steps, in the order the web app shows them:
 
 1. ``contact``: the account. ``POST /application/start`` (public) creates the
    organisation (with a *draft* application, so it is locked), its first
-   admin (the contact) and opens an enrolment session: the applicant enrols
-   an authenticator (QR code, recovery codes) before anything else;
+   admin (the contact) and signs them in with an applicant session (password
+   only, app.auth): it reaches the application alone. Two-step verification
+   becomes mandatory on approval, which ends every session of the
+   organisation's admins: the next sign-in enrols an authenticator (QR code,
+   recovery codes) before anything else;
 2. ``company``: the company's details (legal name, TIN, licence, sector, ...);
 3. ``documents``: trade licence, TIN certificate and authorization letter;
 4. ``review``: submit. Endod approves or rejects it through the platform

@@ -312,24 +312,25 @@ def start_application(client, email=None, ip=CLIENT_IP, **fields):
 
 
 class Applicant:
-    """A company applying: its account made and an authenticator enrolled."""
+    """A company applying: its account made, signed in with the password only
+    (an ``applicant`` session). ``enrolled``: an applicant who enrolled an
+    authenticator anyway (as every applicant had to before), signed in with a code."""
 
-    def __init__(self, client, clock, email=None, **fields):
+    def __init__(self, client, clock, email=None, enrolled=False, **fields):
         self.client = client
         self.clock = clock
         resp = start_application(client, email=email, **fields)
         assert resp.status_code == 200, resp.text
-        assert resp.json()["stage"] == "enroll"
-        self.enroll_headers = bearer(resp.json()["session_token"])
-        me = client.get("/auth/me", headers=self.enroll_headers).json()
+        assert resp.json()["stage"] == "applicant"
+        self.headers = bearer(resp.json()["session_token"])
+        me = client.get("/auth/me", headers=self.headers).json()
+        assert me["stage"] == "applicant"
         self.email = me["admin"]["email"]
         self.org_id = me["organisation"]["id"]
-        self.secret = client.post("/auth/enroll/start", headers=self.enroll_headers).json()["secret"]
-        done = client.post("/auth/enroll/confirm", json={"code": code(self.secret, clock)}, headers=self.enroll_headers)
-        assert done.status_code == 200, done.text
-        clock.advance()
-        self.recovery_codes = done.json()["recovery_codes"]
-        self.headers = bearer(done.json()["session_token"])
+        self.secret = None
+        if enrolled:
+            self.secret = enrol_directly(self.email)
+            self.headers = sign_in(client, clock, self.secret, email=self.email)
 
     def get(self, path, **kw):
         return self.client.get(path, headers=self.headers, **kw)
@@ -367,8 +368,47 @@ class Applicant:
         return resp.json()
 
     def sign_in_again(self):
-        self.headers = sign_in(self.client, self.clock, self.secret, email=self.email)
+        """Password only (or password and code, once enrolled)."""
+        if self.secret:
+            self.headers = sign_in(self.client, self.clock, self.secret, email=self.email)
+        else:
+            self.headers = applicant_sign_in(self.client, self.email)
         return self.headers
+
+    def enrol_after_approval(self):
+        """The first sign-in after approval: password, then the forced enrolment.
+        Returns the recovery codes; ``headers`` is the full session."""
+        opened = password_step(self.client, email=self.email)
+        assert opened["stage"] == "enroll", opened
+        headers = bearer(opened["session_token"])
+        self.secret = self.client.post("/auth/enroll/start", headers=headers).json()["secret"]
+        done = self.client.post("/auth/enroll/confirm", json={"code": code(self.secret, self.clock)}, headers=headers)
+        assert done.status_code == 200, done.text
+        self.clock.advance()
+        self.headers = bearer(done.json()["session_token"])
+        return done.json()["recovery_codes"]
+
+
+def applicant_sign_in(client, email, ip=CLIENT_IP):
+    """An applicant's password-only sign-in; returns the session's headers."""
+    opened = password_step(client, email=email, headers=from_ip(ip))
+    assert opened["stage"] == "applicant", opened
+    return bearer(opened["session_token"])
+
+
+def enrol_directly(email):
+    """Give an admin a confirmed authenticator (as the enrolment does); returns its secret."""
+    from app import security, totp
+    from app.db import session_scope, utcnow
+    from app.models import OrgAdmin
+    from sqlalchemy import select
+
+    secret = totp.new_secret()
+    with session_scope() as session:
+        admin = session.scalar(select(OrgAdmin).where(OrgAdmin.email == email))
+        admin.totp_secret = security.seal(secret)
+        admin.totp_enrolled_at = utcnow()
+    return secret
 
 
 def approve_application(client, headers, org_id, reviewer="reviewer@endod.example"):

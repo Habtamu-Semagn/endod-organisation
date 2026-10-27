@@ -1,7 +1,8 @@
 """`/application`: a company's own application (app.onboarding).
 
 * ``POST /application/start`` (public): the organisation, its first admin
-  (the contact) and an enrolment session: TOTP comes before anything else.
+  (the contact) and an applicant session (password only): it reaches these
+  routes alone. Two-step verification is enrolled once Endod approves.
   Limited per address (ORG_APPLICATIONS_PER_IP per window), and refused from
   an address the sign-in limit has blocked.
 * ``GET /application``: the application, what is missing, where to resume;
@@ -17,7 +18,8 @@ Every change locks the organisation, then the application
 only the version its reviewer saw (``expected_updated_at``).
 
 These are the only routes (with sign-in and sign-out) that the admins of an
-organisation that is not approved can use (app.auth.current_admin).
+organisation that is not approved can use (app.auth.current_admin), and the
+only ones an applicant's password-only session reaches (app.auth.signed_in_admin).
 """
 
 from __future__ import annotations
@@ -125,7 +127,7 @@ def start(body: StartRequest, request: Request, ip: str = Depends(auth.client_ip
                 audit.record(session, audit.APPLICATION_STARTED, AuditResult.SUCCESS, organisation_id=org.id,
                              admin_id=admin.id, admin_email=email, ip=ip, target_type="organisation",
                              target_id=org.id, target_name=legal_name)
-                opened = auth.open_enrolment(session, admin, now, ip, _ua(request))
+                opened = auth.open_applicant(session, admin, now, ip, _ua(request))
                 return auth.opened_payload(opened)
     except IntegrityError as exc:
         # The same email, taken at the same moment.

@@ -16,7 +16,8 @@ Fields
   health, education, retail, transport, agriculture, other), employee_count (int >= 1),
   city, address, phone (Ethiopian number), email.
 - contact (the applicant = the first OrgAdmin): full_name, title, phone (Ethiopian mobile),
-  email (sign-in), password; TOTP enrolment is required before the wizard continues.
+  email (sign-in), password. The applicant signs in with the password only while the
+  application is not approved (Amendment 2); TOTP enrolment comes after approval.
 - documents (all required): trade_license, tin_certificate, authorization_letter.
   PDF/JPEG/PNG/WebP, magic-byte checked, at most 10 MB each.
 
@@ -72,3 +73,21 @@ ids are 32-char lowercase hex. Unknown ids -> 404.
 - `POST /platform/applications/{id}/reject` body adds optional `"close": bool`
   (default false). With `close: true` the status becomes `closed`.
 - `status` filter accepts `closed`.
+
+## Amendment 2 (two-step verification after approval)
+
+The platform API is unchanged (paths, bodies, answers). What changes for the
+company:
+
+- While the application is not approved (`draft`, `submitted`, `rejected`,
+  `closed`), the applicant signs in with the password only. That session
+  reaches only the application, its status page, the application's own
+  documents and sign-out; everything else answers 403 as before. The same
+  sign-in throttles and lockouts apply. An applicant who already enrolled an
+  authenticator still gives a code.
+- `POST /platform/applications/{id}/approve` also signs out every admin of the
+  organisation (all sessions revoked, in the same transaction, audited as
+  `sessions_revoked`). Their next sign-in is the password, then the mandatory
+  TOTP enrolment (QR code, a code, 10 recovery codes), then the dashboard.
+- Organisations made with the CLI and their admins are unchanged: TOTP is
+  mandatory from the first sign-in (through the setup link).

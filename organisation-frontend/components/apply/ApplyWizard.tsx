@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, apiFetch, uploadApplicationDocument, RECEIPT_TYPES } from "@/lib/api";
 import { hardNavigate } from "@/lib/navigation";
-import { SECTORS, STEPS, sectorLabel, type Application, type Company, type StepKey } from "@/lib/application";
+import { SECTORS, STEPS, TWO_STEP_LATER, sectorLabel, type Application, type Company, type StepKey } from "@/lib/application";
 import type { Me } from "@/lib/types";
 import ApplyFrame from "@/components/apply/ApplyFrame";
 import { FormError, inputClass, labelClass, linkButton, primaryButton } from "@/components/auth/AuthCard";
@@ -79,10 +79,12 @@ function Field({ id, label, hint, children }: { id: string; label: string; hint?
 
 /**
  * A company's application to TenaCare, after the hospital portal's
- * onboarding wizard: the account (and a mandatory authenticator), the
- * company, its documents, then review and submit. Each step is saved on the
- * API as it is completed, so a reload or a later sign-in comes back to the
- * first step still missing something.
+ * onboarding wizard: the account, the company, its documents, then review
+ * and submit. The applicant signs in with the password only until Endod
+ * approves the company; two-step verification is set up at the first
+ * sign-in after that. Each step is saved on the API as it is completed, so a
+ * reload or a later sign-in comes back to the first step still missing
+ * something.
  */
 export default function ApplyWizard() {
   const [state, setState] = useState<State>({ status: "loading" });
@@ -149,7 +151,7 @@ export default function ApplyWizard() {
           </p>
         }
       >
-        <AccountStep />
+        <AccountStep onCreated={load} />
       </ApplyFrame>
     );
   }
@@ -182,7 +184,7 @@ export default function ApplyWizard() {
 
 // --- step 1: the account -------------------------------------------------------------------------
 
-function AccountStep() {
+function AccountStep({ onCreated }: { onCreated: () => void }) {
   const [form, setForm] = useState({ legal_name: "", full_name: "", title: "", phone: "", email: "", password: "", repeat: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -206,8 +208,8 @@ function AccountStep() {
         password: form.password,
       };
       await apiFetch("application/start", { method: "POST", body, redirectOn401: false });
-      // Two-step verification comes before anything else.
-      hardNavigate("/enroll");
+      // Signed in with the password: straight on to the company.
+      onCreated();
     } catch (e) {
       setError(messageOf(e, "Could not create the account."));
       setBusy(false);
@@ -239,6 +241,9 @@ function AccountStep() {
           <input id="repeat" type="password" required value={form.repeat} onChange={set("repeat")} className={inputClass} autoComplete="new-password" />
         </Field>
       </div>
+      <p data-testid="two-step-later" className="font-body-sm text-body-sm text-on-surface-variant">
+        {TWO_STEP_LATER}
+      </p>
       <FormError message={error} />
       <button type="submit" disabled={busy} className={primaryButton}>
         {busy ? "Creating your account…" : "Create account and continue"}

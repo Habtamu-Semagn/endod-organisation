@@ -16,6 +16,11 @@ edit moves ``updated_at``); ``reject`` with ``close`` ends an application for
 good (``closed``); list and detail carry ``duplicate_tin`` and
 ``email_verified``.
 
+Approval also revokes every session of the organisation's admins, in the same
+transaction, and audits it (``sessions_revoked``): the applicant's
+password-only session ends, and their next sign-in enrols two-step
+verification before anything else (app.auth).
+
 Lock order: approve, reject and suspend lock the organisation row first, then
 the application (app.onboarding.lock_for_change), exactly as the applicant's
 own paths do, so an applicant's save and Endod's decision never deadlock.
@@ -193,6 +198,15 @@ def approve(application_id: str, body: Approval, request: Request) -> Dict[str, 
                          admin_email=body.reviewer, ip=_caller_ip(request), target_type="organisation",
                          target_id=org.id, target_name=org.name,
                          detail={"via": "platform", "reviewer": body.reviewer, "tin": app.tin})
+            # Every session of its admins ends now (the applicant's password-only one
+            # included): two-step verification is mandatory from here on.
+            admin_ids = list(session.scalars(select(OrgAdmin.id).where(OrgAdmin.organisation_id == org.id)))
+            revoked = sum(auth.revoke_all(session, admin_id, now) for admin_id in admin_ids)
+            audit.record(session, audit.SESSIONS_REVOKED, AuditResult.SUCCESS, organisation_id=org.id,
+                         admin_email=body.reviewer, ip=_caller_ip(request), target_type="organisation",
+                         target_id=org.id, target_name=org.name,
+                         detail={"via": "platform", "reason": "application_approved", "admins": len(admin_ids),
+                                 "sessions": revoked})
             session.flush()
     except IntegrityError as exc:
         raise ApiError(409, "Another organisation already has this TIN.", "TIN_TAKEN") from exc

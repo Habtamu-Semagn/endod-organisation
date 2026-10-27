@@ -52,7 +52,9 @@ export default function PortalShell({ children }: { children: ReactNode }) {
     apiFetch<Me>("auth/me")
       .then((value) => {
         if (!alive) return;
-        if (value.stage !== "full") goToLogin();
+        // A company's applicant signed in with the password only: the application, nothing else.
+        if (value.stage === "applicant") hardNavigate("/apply");
+        else if (value.stage !== "full") goToLogin();
         // A company still applying sees only its application (the API refuses the rest).
         else if (value.organisation.application_status && value.organisation.application_status !== "approved") hardNavigate("/apply");
         else setMe(value);

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError, apiFetch, safeNext } from "@/lib/api";
+import { applicationPage, type Application } from "@/lib/application";
 import type { Me, Stage } from "@/lib/types";
 import AuthCard, { FormError, inputClass, labelClass, linkButton, primaryButton } from "@/components/auth/AuthCard";
 
@@ -20,9 +21,16 @@ export default function LoginForm() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // A company's applicant (password only until it is approved): the wizard or the Under review page.
+  const toApplication = async () => {
+    const application = await apiFetch<Application>("application", { redirectOn401: false }).catch(() => null);
+    router.replace(applicationPage(application?.status));
+  };
+
   const go = (stage: Stage) => {
     if (stage === "full") router.replace(next);
     else if (stage === "enroll") router.replace("/enroll");
+    else if (stage === "applicant") void toApplication();
     else setStep("code");
   };
 
@@ -140,7 +148,10 @@ export default function LoginForm() {
   }
 
   return (
-    <AuthCard title="Sign in" subtitle="TenaCare organisation portal. Two-step verification is required.">
+    <AuthCard
+      title="Sign in"
+      subtitle="TenaCare organisation portal. Two-step verification is required once your organisation is approved."
+    >
       <form onSubmit={submitPassword} className="space-y-4">
         <div>
           <label htmlFor="email" className={labelClass}>Email</label>

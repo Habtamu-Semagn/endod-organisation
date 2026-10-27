@@ -1,11 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { API_URL, PLATFORM_KEY } from "./env";
-import { Authenticator, PASSWORD, PNG, cli, currentStep, passwordStep, totpAt, uniqueEmail } from "./helpers";
+import { PASSWORD, PNG, api, cli, enrolOnPage, passwordStep, uniqueEmail } from "./helpers";
 
 /** A small real PDF (the API checks the first bytes). */
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
 
 const REVIEWER = "reviewer@endod.example";
+const TWO_STEP_LATER = "You'll set up two-step verification (Google Authenticator) once your company is approved.";
 
 /** What Endod's super admin does, over endod-bus, straight to the API with the platform key. */
 async function platform(page: Page, path: string, data?: unknown) {
@@ -18,7 +19,7 @@ async function platform(page: Page, path: string, data?: unknown) {
   return response.json();
 }
 
-test("a company applies, enrols, is reviewed by Endod and then gets the portal", async ({ page }) => {
+test("a company applies with a password, is reviewed by Endod, then enrols and gets the portal", async ({ page }) => {
   const email = uniqueEmail("apply");
   const tin = `99${String(Date.now() % 100_000_000).padStart(8, "0")}`;
 
@@ -34,22 +35,17 @@ test("a company applies, enrols, is reviewed by Endod and then gets the portal",
   await page.getByLabel("Work email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByLabel("Repeat the password").fill(PASSWORD);
+  await expect(page.getByTestId("two-step-later").filter({ visible: true })).toHaveText(TWO_STEP_LATER);
   await page.getByRole("button", { name: "Create account and continue" }).click();
 
-  // Two-step verification first: the QR code, a code, the recovery codes.
-  await expect(page).toHaveURL(/\/enroll$/);
-  await expect(page.getByTestId("totp-qr").filter({ visible: true })).toBeVisible();
-  const secret = ((await page.getByTestId("totp-secret").filter({ visible: true }).textContent()) ?? "").replace(/\s/g, "");
-  const step = currentStep();
-  await page.getByLabel("Code from the app").fill(totpAt(secret, step));
-  await page.getByRole("button", { name: "Confirm and continue" }).click();
-  await expect(page.getByTestId("recovery-code").filter({ visible: true })).toHaveCount(10);
-  await page.getByLabel("I have saved my recovery codes").check();
-  await page.getByRole("button", { name: "Continue to your application" }).click();
-  const auth = new Authenticator(secret, step);
+  // No enrolment while applying: straight on to the company, signed in with the password.
+  await expect(page).toHaveURL(/\/apply$/);
+  await expect(page.getByRole("heading", { name: "Your company" })).toBeVisible();
+  expect((await (await page.request.get("/api/auth/me")).json()).stage).toBe("applicant");
+  const enrol = await api(page, "POST", "auth/enroll/start");
+  expect(enrol.status()).toBe(409);
 
   // The company.
-  await expect(page).toHaveURL(/\/apply$/);
   await expect(page.getByRole("heading", { name: "Your company" })).toBeVisible();
   await expect(page.getByLabel("Legal name")).toHaveValue("Abyssinia Textiles PLC");
   await page.getByLabel("Trade name (optional)").fill("Abyssinia Tex");
@@ -67,9 +63,8 @@ test("a company applies, enrols, is reviewed by Endod and then gets the portal",
   // Saved as it goes: sign out, sign in again, and it carries on at the documents.
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page).toHaveURL(/\/login$/);
+  // The password alone, no code.
   await passwordStep(page, email, PASSWORD);
-  await page.getByLabel("Authentication code").fill(await auth.next());
-  await page.getByRole("button", { name: "Verify" }).click();
   await expect(page).toHaveURL(/\/apply$/);
   await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
 
@@ -95,6 +90,7 @@ test("a company applies, enrols, is reviewed by Endod and then gets the portal",
   await expect(page).toHaveURL(/\/under-review$/);
   await expect(page.getByTestId("under-review")).toHaveAttribute("data-status", "submitted");
   await expect(page.getByRole("heading", { name: "Under review" })).toBeVisible();
+  await expect(page.getByTestId("two-step-later").filter({ visible: true })).toHaveText(TWO_STEP_LATER);
 
   // Locked: the portal sends it back here, the API refuses the rest, and the
   // web app never passes the platform API on.
@@ -103,6 +99,9 @@ test("a company applies, enrols, is reviewed by Endod and then gets the portal",
   const overview = await page.request.get("/api/overview");
   expect(overview.status()).toBe(403);
   expect((await overview.json()).error_code).toBe("APPLICATION_NOT_APPROVED");
+  for (const path of ["employees", "claims", "policy", "reports", "organisation"]) {
+    expect((await page.request.get(`/api/${path}`)).status()).toBe(403);
+  }
   for (const path of ["platform/applications", "platform/organisations", `platform/applications/${"a1".repeat(16)}/approve`]) {
     expect((await page.request.get(`/api/${path}`)).status()).toBe(404);
   }
@@ -128,13 +127,26 @@ test("a company applies, enrols, is reviewed by Endod and then gets the portal",
   await expect(page).toHaveURL(/\/under-review$/);
   await expect(page.getByTestId("under-review")).toHaveAttribute("data-status", "submitted");
 
-  // Endod approves it: the dashboard opens.
-  // The reviewer approves the version they looked at.
+  // Signing in again (the password only) goes straight to the Under review page.
+  await page.getByRole("button", { name: "Sign out" }).last().click();
+  await expect(page).toHaveURL(/\/login$/);
+  await passwordStep(page, email, PASSWORD);
+  await expect(page).toHaveURL(/\/under-review$/);
+  await expect(page.getByTestId("under-review")).toHaveAttribute("data-status", "submitted");
+
+  // Endod approves it (the version the reviewer looked at): every session of the company ends.
   const detail = await platform(page, `applications/${id}`);
   expect(detail).toMatchObject({ status: "submitted", duplicate_tin: false, email_verified: false });
   await platform(page, `applications/${id}/approve`, { reviewer: REVIEWER, expected_updated_at: detail.updated_at });
+  expect((await page.request.get("/api/application")).status()).toBe(401);
   await page.reload();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/login/);
+
+  // The next sign-in: the password, then two-step verification is mandatory, then the dashboard.
+  await passwordStep(page, email, PASSWORD);
+  await expect(page).toHaveURL(/\/enroll$/);
+  expect((await page.request.get("/api/overview")).status()).toBe(403);
+  await enrolOnPage(page);
   await expect(page.getByRole("heading", { name: "Medication Benefit Overview" })).toBeVisible();
   await expect(page.getByTestId("signed-in-organisation").filter({ visible: true })).toContainText("Abyssinia Textiles PLC");
   expect((await page.request.get("/api/overview")).status()).toBe(200);
@@ -156,12 +168,7 @@ test("the application refuses a TIN that is in use, with a generic message", asy
   await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByLabel("Repeat the password").fill(PASSWORD);
   await page.getByRole("button", { name: "Create account and continue" }).click();
-  await expect(page).toHaveURL(/\/enroll$/);
-  const secret = ((await page.getByTestId("totp-secret").filter({ visible: true }).textContent()) ?? "").replace(/\s/g, "");
-  await page.getByLabel("Code from the app").fill(totpAt(secret, currentStep()));
-  await page.getByRole("button", { name: "Confirm and continue" }).click();
-  await page.getByLabel("I have saved my recovery codes").check();
-  await page.getByRole("button", { name: "Continue to your application" }).click();
+  await expect(page).toHaveURL(/\/apply$/);
   await expect(page.getByRole("heading", { name: "Your company" })).toBeVisible();
   await page.getByLabel("TIN", { exact: true }).fill(tin);
   await page.getByLabel("Business license number").fill("AA/1/1");

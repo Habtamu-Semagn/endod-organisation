@@ -1,6 +1,7 @@
 /** Shapes of the portal API's answers. Amounts are integers in santim. */
 
-export type Stage = "totp" | "enroll" | "full";
+/** "applicant": a company's applicant signed in with the password only (the application alone, until approval). */
+export type Stage = "totp" | "enroll" | "full" | "applicant";
 
 export type ApplicationStatus = "draft" | "submitted" | "approved" | "rejected" | "closed";
 

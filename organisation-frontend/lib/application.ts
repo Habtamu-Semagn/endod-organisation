@@ -46,6 +46,14 @@ export type Application = {
   documents?: ApplicationDocument[];
 };
 
+/** Said wherever an applicant reads about signing in. */
+export const TWO_STEP_LATER = "You'll set up two-step verification (Google Authenticator) once your company is approved.";
+
+/** Where an applicant goes: the wizard, or the Under review page once the application is with Endod (or closed). */
+export function applicationPage(status: ApplicationStatus | undefined): "/apply" | "/under-review" {
+  return status === "submitted" || status === "rejected" || status === "closed" ? "/under-review" : "/apply";
+}
+
 export const STEPS: { key: StepKey; label: string }[] = [
   { key: "contact", label: "Account" },
   { key: "company", label: "Company" },
