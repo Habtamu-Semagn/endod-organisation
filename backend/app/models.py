@@ -2,7 +2,10 @@
 
 Every business row carries ``organisation_id``, and every query the API
 makes filters on the signed-in admin's organisation (app.tenancy): an admin
-never reads or changes another organisation's rows.
+never reads or changes another organisation's rows. Within an organisation, a
+row refers to another (a claim to its employee, ...) by a composite foreign
+key on (organisation_id, id), so the database itself refuses a reference to
+another organisation's row (``same_org``).
 
 Money is always an integer number of santim (1 ETB = 100 santim); there are
 no floats anywhere.
@@ -14,8 +17,8 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text,
-    UniqueConstraint, text, true,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String,
+    Text, UniqueConstraint, text, true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -114,6 +117,18 @@ class Relationship:
     ALL = ("spouse", "child", "parent", "other")
 
 
+def same_org(column: str, parent: str, name: str, **kw) -> ForeignKeyConstraint:
+    """(organisation_id, ``column``) -> ``parent``(organisation_id, id): the
+    parent row is of the same organisation (migration 0005)."""
+    return ForeignKeyConstraint(["organisation_id", column], [f"{parent}.organisation_id", f"{parent}.id"],
+                                name=name, **kw)
+
+
+def org_and_id(table: str) -> UniqueConstraint:
+    """What ``same_org`` references: (organisation_id, id) of ``table``."""
+    return UniqueConstraint("organisation_id", "id", name=f"uq_{table}_org_id")
+
+
 # --- organisations and their admins ----------------------------------------------------------
 
 class Organisation(Base):
@@ -176,6 +191,8 @@ class OrgAdmin(Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    __table_args__ = (org_and_id("org_admins"),)
+
 
 class OrganisationApplication(Base):
     """A company's application to use TenaCare, filled in by its first admin
@@ -216,6 +233,7 @@ class OrganisationApplication(Base):
     __table_args__ = (
         CheckConstraint("status IN ('draft', 'submitted', 'approved', 'rejected', 'closed')", name="status"),
         CheckConstraint("employee_count IS NULL OR employee_count >= 1", name="employee_count_positive"),
+        same_org("contact_admin_id", "org_admins", "fk_organisation_applications_contact_same_org"),
     )
 
 
@@ -368,6 +386,7 @@ class Employee(Base):
     __table_args__ = (
         UniqueConstraint("organisation_id", "employee_number", name="uq_employees_org_number"),
         UniqueConstraint("organisation_id", "endod_id", name="uq_employees_org_endod_id"),
+        org_and_id("employees"),
     )
 
 
@@ -376,12 +395,17 @@ class Dependant(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
-    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    employee_id: Mapped[str] = mapped_column(String(32), index=True)
     name: Mapped[str] = mapped_column(String(120))
     relationship: Mapped[str] = mapped_column(String(16))
     birth_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        same_org("employee_id", "employees", "fk_dependants_employee_same_org", ondelete="CASCADE"),
+        org_and_id("dependants"),
+    )
 
 
 class BenefitPolicy(Base):
@@ -393,8 +417,7 @@ class BenefitPolicy(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
-    employee_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("employees.id", ondelete="CASCADE"), nullable=True)
+    employee_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     annual_limit_santim: Mapped[int] = mapped_column(BigInteger)
     #: Whole percent (0-100) of each claim the employee bears.
     copay_percent: Mapped[int] = mapped_column(Integer, default=0)
@@ -417,6 +440,7 @@ class BenefitPolicy(Base):
         CheckConstraint("copay_percent >= 0 AND copay_percent <= 100", name="copay_range"),
         CheckConstraint("year_start_month >= 1 AND year_start_month <= 12", name="year_start_month"),
         CheckConstraint("year_start_day >= 1 AND year_start_day <= 31", name="year_start_day"),
+        same_org("employee_id", "employees", "fk_benefit_policies_employee_same_org", ondelete="CASCADE"),
     )
 
 
@@ -436,6 +460,8 @@ class ReceiptFile(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     uploaded_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (org_and_id("receipt_files"),)
 
 
 class PaymentBatch(Base):
@@ -466,6 +492,7 @@ class PaymentBatch(Base):
         UniqueConstraint("organisation_id", "number", name="uq_payment_batches_org_number"),
         CheckConstraint("status IN ('open', 'paid')", name="status"),
         CheckConstraint("total_santim >= 0", name="total_not_negative"),
+        org_and_id("payment_batches"),
     )
 
 
@@ -476,9 +503,9 @@ class Claim(Base):
     organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
     #: Shown as CLM-000123; per organisation.
     number: Mapped[int] = mapped_column(Integer)
-    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True)
+    employee_id: Mapped[str] = mapped_column(String(32), index=True)
     #: Set when the medicine was for a dependant of the employee.
-    dependant_id: Mapped[Optional[str]] = mapped_column(ForeignKey("dependants.id"), nullable=True)
+    dependant_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     #: app.models.ClaimSource; ``external_ref`` is the dispensing record's id
     #: for claims that will come from Endod pharmacies.
     source: Mapped[str] = mapped_column(String(16), default=ClaimSource.MANUAL)
@@ -496,13 +523,13 @@ class Claim(Base):
     status: Mapped[str] = mapped_column(String(16), default=ClaimStatus.PENDING, index=True)
     #: Why it was rejected (shown to HR; told to the employee).
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    receipt_file_id: Mapped[Optional[str]] = mapped_column(ForeignKey("receipt_files.id"), unique=True, nullable=True)
+    receipt_file_id: Mapped[Optional[str]] = mapped_column(String(32), unique=True, nullable=True)
     created_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     reviewed_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     reviewer_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    batch_id: Mapped[Optional[str]] = mapped_column(ForeignKey("payment_batches.id"), nullable=True, index=True)
+    batch_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     #: The employee's account when the claim was batched (the exported file
     #: and a paid batch keep it, whatever changes on the employee later).
     payout_account: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
@@ -519,6 +546,10 @@ class Claim(Base):
         CheckConstraint("total_santim > 0", name="total_positive"),
         CheckConstraint("approved_santim IS NULL OR approved_santim >= 0", name="approved_not_negative"),
         CheckConstraint("copay_santim IS NULL OR copay_santim >= 0", name="copay_not_negative"),
+        same_org("employee_id", "employees", "fk_claims_employee_same_org"),
+        same_org("dependant_id", "dependants", "fk_claims_dependant_same_org"),
+        same_org("receipt_file_id", "receipt_files", "fk_claims_receipt_file_same_org"),
+        same_org("batch_id", "payment_batches", "fk_claims_batch_same_org"),
     )
 
 
