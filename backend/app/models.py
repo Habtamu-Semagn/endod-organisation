@@ -32,7 +32,12 @@ class SessionStage:
     ENROLL = "enroll"
     #: Signed in.
     FULL = "full"
-    ALL = (TOTP, ENROLL, FULL)
+    #: A company's applicant signed in with the password only, while the
+    #: organisation is not approved: reaches the application routes (and the
+    #: sign-in steps and sign-out), nothing else. Approval revokes it; two-step
+    #: verification is enrolled at the next sign-in.
+    APPLICANT = "applicant"
+    ALL = (TOTP, ENROLL, FULL, APPLICANT)
 
 
 class OrgStatus:

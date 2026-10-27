@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, apiFetch } from "@/lib/api";
 import { hardNavigate } from "@/lib/navigation";
-import type { Application } from "@/lib/application";
+import { TWO_STEP_LATER, type Application } from "@/lib/application";
 import type { Me } from "@/lib/types";
 import ApplyFrame from "@/components/apply/ApplyFrame";
 import { signOut } from "@/components/apply/ApplyWizard";
@@ -11,7 +11,10 @@ import { FormError, linkButton, primaryButton } from "@/components/auth/AuthCard
 
 const NEXT_STEPS = [
   { icon: "fact_check", text: "Endod checks your company details and documents." },
-  { icon: "verified", text: "Once approved, you sign in to the full portal: add your employees and set the benefit policy." },
+  {
+    icon: "verified",
+    text: "Once approved, you sign in again and set up two-step verification (Google Authenticator): from then on, a code from the app at every sign-in. Then you add your employees and set the benefit policy.",
+  },
   { icon: "receipt_long", text: "Then you enter your employees' medication claims and pay them back." },
 ];
 
@@ -35,7 +38,7 @@ export default function UnderReview() {
     (async () => {
       try {
         const me = await apiFetch<Me>("auth/me");
-        if (me.stage !== "full") return hardNavigate("/login");
+        if (me.stage !== "full" && me.stage !== "applicant") return hardNavigate("/login");
         if (!me.organisation.application_status || me.organisation.application_status === "approved") return hardNavigate("/");
         const loaded = await apiFetch<Application>("application");
         if (loaded.status === "approved") return hardNavigate("/");
@@ -115,6 +118,9 @@ export default function UnderReview() {
             review. Until it is approved, this is the only page of the portal you can use.
           </p>
         )}
+        <p data-testid="two-step-later" className="font-body-sm text-body-sm text-on-surface-variant">
+          {TWO_STEP_LATER}
+        </p>
         <section>
           <p className="mb-2 font-label-md text-label-md uppercase tracking-wider text-on-surface-variant font-semibold">What happens next</p>
           <ol className="space-y-2">

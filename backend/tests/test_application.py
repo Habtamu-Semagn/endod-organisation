@@ -1,7 +1,8 @@
 """A company applies itself (app.api.application, docs/company-onboarding.md):
-the account and a mandatory authenticator first, then the company, the
+the account (signed in with the password only), then the company, the
 documents and submission; until Endod approves it, its admins reach only the
-application (every other route answers 403)."""
+application (every other route answers 403). Two-step verification becomes
+mandatory on approval (tests/test_two_step_after_approval.py)."""
 
 import re
 
@@ -17,34 +18,28 @@ from app.models import ApplicationDocument, Organisation
 REFUSED = "This application cannot be accepted with these details. Contact Endod if you think this is a mistake."
 
 
-# --- step 1: the account and the authenticator ----------------------------------------------
+# --- step 1: the account ---------------------------------------------------------------------
 
-def test_starting_makes_a_locked_draft_organisation_and_requires_an_authenticator(client, clock):
+def test_starting_makes_a_locked_draft_organisation_signed_in_with_the_password_only(client, clock):
     resp = start_application(client, email="Meron@Abyssinia.example", legal_name="Abyssinia Textiles PLC")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["stage"] == "enroll"
+    assert resp.json()["stage"] == "applicant"
     headers = bearer(resp.json()["session_token"])
 
     me = client.get("/auth/me", headers=headers).json()
-    assert me["stage"] == "enroll"
+    assert me["stage"] == "applicant"
     assert me["admin"]["email"] == "meron@abyssinia.example"
     assert me["organisation"]["name"] == "Abyssinia Textiles PLC"
     assert me["organisation"]["application_status"] == "draft"
-    # Nothing, not even the application, before the authenticator is enrolled.
-    for method, path in (("GET", "/application"), ("PUT", "/application/company"), ("POST", "/application/submit"),
-                         ("GET", "/overview")):
-        denied = client.request(method, path, json=COMPANY, headers=headers)
-        assert denied.status_code == 403 and denied.json()["error_code"] == "SESSION_INCOMPLETE", (method, path)
+    # No authenticator while applying: straight on to the company step...
+    for path in ("/auth/enroll/start", "/auth/enroll/confirm", "/auth/totp"):
+        resp = client.post(path, json={"code": "123456"}, headers=headers)
+        assert resp.status_code == 409 and resp.json()["error_code"] == "WRONG_STAGE", path
+    # ...and nothing but the application.
+    denied = client.get("/overview", headers=headers)
+    assert denied.status_code == 403 and denied.json()["error_code"] == "APPLICATION_NOT_APPROVED"
 
-    started = client.post("/auth/enroll/start", headers=headers).json()
-    assert started["otpauth_uri"].startswith("otpauth://totp/")
-    from conftest import code
-    done = client.post("/auth/enroll/confirm", json={"code": code(started["secret"], clock)}, headers=headers)
-    assert done.status_code == 200
-    assert len(done.json()["recovery_codes"]) == 10
-    full = bearer(done.json()["session_token"])
-
-    app = client.get("/application", headers=full).json()
+    app = client.get("/application", headers=headers).json()
     assert app["status"] == "draft" and app["editable"] is True
     assert app["contact"] == {"full_name": "Meron Alemu", "title": "HR Manager", "phone": "+251911223344",
                               "email": "meron@abyssinia.example"}
@@ -115,20 +110,17 @@ def test_an_address_blocked_for_failed_sign_ins_cannot_apply(client, monkeypatch
     assert start_application(client, ip="203.0.113.10").status_code == 200
 
 
-def test_an_applicant_who_left_before_enrolling_enrols_after_signing_in(client, clock):
+def test_an_applicant_signs_in_again_with_the_password_only(client, clock):
     resp = start_application(client, email="left@company.example")
     assert resp.status_code == 200
     # Wrong password: the generic answer, counted like any other.
     wrong = client.post("/auth/login", json={"email": "left@company.example", "password": "wrong-password-1"})
     assert wrong.status_code == 401 and wrong.json()["error"] == "Incorrect email or password."
+    assert "wrong_password" in events("sign_in")[-1][4]
     again = password_step(client, email="left@company.example")
-    assert again["stage"] == "enroll"
-    headers = bearer(again["session_token"])
-    from conftest import code
-    secret = client.post("/auth/enroll/start", headers=headers).json()["secret"]
-    done = client.post("/auth/enroll/confirm", json={"code": code(secret, clock)}, headers=headers)
-    assert done.status_code == 200
-    assert client.get("/application", headers=bearer(done.json()["session_token"])).json()["status"] == "draft"
+    assert again["stage"] == "applicant"
+    assert client.get("/application", headers=bearer(again["session_token"])).json()["status"] == "draft"
+    assert "password_only_applicant" in events("sign_in")[-1][4]
 
 
 def test_an_unenrolled_cli_admin_still_cannot_sign_in_with_a_password(client):
@@ -338,16 +330,26 @@ def test_the_lockout_covers_the_portal():
 
 @pytest.fixture
 def locked_states(client, clock, platform_key):
-    """Admins of a draft, a submitted and a rejected application."""
+    """Admins of a draft, a submitted, a rejected and a closed application,
+    signed in with the password only, and an applicant who enrolled anyway
+    (a full session of an organisation that is not approved)."""
     draft = Applicant(client, clock)
     submitted = Applicant(client, clock)
     submitted.complete(tin="0045670001")
     rejected = Applicant(client, clock)
     rejected.complete(tin="0045670002")
-    resp = client.post(f"/platform/applications/{rejected.org_id}/reject", headers=platform_key,
-                       json={"reason": "The trade license is expired.", "reviewer": "reviewer@endod.example"})
-    assert resp.status_code == 200
-    return [draft, submitted, rejected]
+    closed = Applicant(client, clock)
+    closed.complete(tin="0045670003")
+    for a, close in ((rejected, False), (closed, True)):
+        resp = client.post(f"/platform/applications/{a.org_id}/reject", headers=platform_key,
+                           json={"reason": "The trade license is expired.", "reviewer": "reviewer@endod.example",
+                                 "close": close})
+        assert resp.status_code == 200
+    enrolled = Applicant(client, clock, enrolled=True)
+    for a in (draft, submitted, rejected, closed):
+        assert client.get("/auth/me", headers=a.headers).json()["stage"] == "applicant"
+    assert client.get("/auth/me", headers=enrolled.headers).json()["stage"] == "full"
+    return [draft, submitted, rejected, closed, enrolled]
 
 
 @pytest.mark.parametrize("method, template, path", LOCKED_ROUTES)
@@ -400,7 +402,9 @@ def test_approval_opens_the_portal(client, clock, platform_key):
     assert a.get("/overview").status_code == 403
     resp = approve_application(client, platform_key, a.org_id)
     assert resp.status_code == 200
-    # The same session now reaches everything.
+    # The applicant's session ended; the next sign-in enrols two-step verification.
+    assert a.get("/application").status_code == 401
+    assert len(a.enrol_after_approval()) == 10
     assert a.get("/overview").status_code == 200
     org = a.get("/organisation").json()
     assert org["tin"] == COMPANY["tin"] and org["name"] == COMPANY["legal_name"]
@@ -418,7 +422,7 @@ def test_organisations_made_by_the_cli_count_as_approved(portal):
 
 
 def test_the_applicant_session_cannot_be_used_from_a_pending_sign_in(client, clock):
-    a = Applicant(client, clock)
+    a = Applicant(client, clock, enrolled=True)
     pending = password_step(client, email=a.email)
     assert pending["stage"] == "totp"
     resp = client.get("/application", headers=bearer(pending["session_token"]))

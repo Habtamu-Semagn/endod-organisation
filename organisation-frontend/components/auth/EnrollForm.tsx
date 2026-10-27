@@ -10,9 +10,10 @@ import AuthCard, { FormError, inputClass, labelClass, primaryButton } from "@/co
 type Start = { secret: string; otpauth_uri: string; issuer: string; account: string };
 
 /**
- * Two-step verification is mandatory: at first sign-in (or after a setup
- * link) the admin adds TenaCare to an authenticator app, confirms a code,
- * and receives 10 one-time recovery codes, shown only here.
+ * Two-step verification is mandatory for the portal: after a setup link, or
+ * at a company applicant's first sign-in once Endod approved the company, the
+ * admin adds TenaCare to an authenticator app, confirms a code, and receives
+ * 10 one-time recovery codes, shown only here.
  */
 export default function EnrollForm() {
   const router = useRouter();
@@ -34,6 +35,8 @@ export default function EnrollForm() {
         const me = await apiFetch<Me>("auth/me", { redirectOn401: false });
         if (me.stage === "full") return router.replace("/");
         if (me.stage === "totp") return router.replace("/login");
+        // Still applying: the password is enough until the company is approved.
+        if (me.stage === "applicant") return router.replace("/apply");
         setApplying(Boolean(me.organisation.application_status && me.organisation.application_status !== "approved"));
         const value = await apiFetch<Start>("auth/enroll/start", { method: "POST", redirectOn401: false });
         if (!alive) return;
@@ -144,7 +147,7 @@ export default function EnrollForm() {
       subtitle={
         applying
           ? "Before your application continues, secure your account: scan this QR code with Google Authenticator (or any authenticator app), then enter the 6-digit code it shows."
-          : "Scan this QR code with Google Authenticator (or any authenticator app), then enter the 6-digit code it shows."
+          : "Two-step verification is required for the portal. Scan this QR code with Google Authenticator (or any authenticator app), then enter the 6-digit code it shows."
       }
     >
       {!start ? (

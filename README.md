@@ -35,7 +35,7 @@ The design follows the Endod super admin service (`endod-superadmin`).
   belongs to exactly one organisation.
 - **Company applications** (`docs/company-onboarding.md`, the contract with the super
   admin): the first step creates the organisation (a draft application) and its first
-  admin, who must enrol an authenticator (QR code and recovery codes) before going on;
+  admin, who signs in with the password only and reaches nothing but the application;
   then the company's details, three documents (trade licence, TIN certificate,
   authorization letter; checked like receipts), review and submit. Each step is saved, and
   the wizard resumes after sign-in. Applications are limited per address (5 an hour by
@@ -70,6 +70,9 @@ The design follows the Endod super admin service (`endod-superadmin`).
   route that takes an id with another organisation's ids.
 - **Sign-in**: argon2id passwords and mandatory TOTP (Google Authenticator) with replay
   protection. Admins enrol through one-time setup links; there are 10 recovery codes.
+  A company's applicant uses the password only until Endod approves the company; approval
+  signs out every admin of the organisation (audited), and the applicant's next sign-in
+  enrols an authenticator before anything else.
   Failed sign-in steps lock out one account at one address (5 failures for 15 minutes),
   with per-account exponential backoff that never signs anyone out, and a per-address limit.
 - **Sessions** are server-side, in an httpOnly, Secure, SameSite=Strict `__Host-` cookie,

@@ -7,8 +7,8 @@ import json
 
 import pytest
 from conftest import (
-    BFF_SECRET, CLIENT_IP, COMPANY, PDF, PLATFORM_KEY, PNG, Applicant, approve_application, events, make_admin,
-    make_org, password_step, sign_in,
+    BFF_SECRET, CLIENT_IP, COMPANY, PASSWORD, PDF, PLATFORM_KEY, PNG, Applicant, approve_application, events,
+    make_admin, make_org, password_step, sign_in,
 )
 from fastapi.testclient import TestClient
 
@@ -299,7 +299,13 @@ def test_a_suspended_approved_company_keeps_its_approval(client, clock, endod):
     approve_application(endod, {}, a.org_id)
     endod.post(f"/platform/organisations/{a.org_id}/suspend", json=REVIEWER)
     assert a.get("/application").status_code == 401
+    # Suspended: no sign-in at all, not even to enrol.
+    refused = client.post("/auth/login", json={"email": a.email, "password": PASSWORD})
+    assert refused.status_code == 401 and "organisation_suspended" in events("sign_in")[-1][4]
     endod.post(f"/platform/organisations/{a.org_id}/reactivate", json=REVIEWER)
+    a.enrol_after_approval()
+    assert a.get("/overview").status_code == 200
+    # From now on, password and code.
     a.sign_in_again()
     assert a.get("/overview").status_code == 200
 
