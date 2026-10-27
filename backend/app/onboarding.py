@@ -45,12 +45,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, select
 
-from app import audit, files
-from app.db import ensure_aware, iso, utcnow
+from app import audit, files, rls
+from app.db import PLATFORM_KEY, ensure_aware, iso, utcnow
 from app.errors import ApiError
 from app.models import (
     AdminSession, ApplicationDocument, ApplicationStatus, AuditResult, BenefitPolicy, DocumentKind, LoginThrottle,
-    OrgAdmin, Organisation, OrganisationApplication, OrgStatus, RecoveryCode, SetupToken,
+    OrgAdmin, Organisation, OrganisationApplication, RecoveryCode, SetupToken,
 )
 
 #: A draft not submitted within this many days is deleted (its email was never verified).
@@ -122,10 +122,10 @@ def missing(session, app: OrganisationApplication) -> Dict[str, List[str]]:
 
 def tin_taken(session, tin: str, organisation_id: str) -> bool:
     """``tin`` is held by another approved, active organisation (the only
-    holder of a TIN; applications never block one another)."""
-    return session.scalar(select(Organisation.id).where(
-        Organisation.tin == tin, Organisation.id != organisation_id, Organisation.status == OrgStatus.ACTIVE,
-    )) is not None
+    holder of a TIN; applications never block one another). Asked by the
+    applicant's own session, which sees no other organisation: on PostgreSQL
+    through one SECURITY DEFINER function that answers yes or no (app.rls)."""
+    return rls.tin_taken(session, tin, organisation_id)
 
 
 def duplicate_tin(session, app: OrganisationApplication) -> bool:
@@ -188,7 +188,10 @@ def delete_organisation(session, organisation_id: str) -> None:
 
 
 def sweep_expired_drafts(session, now: Optional[datetime] = None) -> int:
-    """Delete drafts not submitted within DRAFT_DAYS, each audited. Returns how many."""
+    """Delete drafts not submitted within DRAFT_DAYS, each audited. Returns how
+    many. Acts across organisations: ``session`` is an app.db.platform_session."""
+    if not session.info.get(PLATFORM_KEY):
+        raise RuntimeError("The expired-draft sweep runs in a platform session (app.db.platform_session).")
     now = now or utcnow()
     cutoff = now - timedelta(days=DRAFT_DAYS)
     stale = list(session.scalars(select(OrganisationApplication.organisation_id).where(

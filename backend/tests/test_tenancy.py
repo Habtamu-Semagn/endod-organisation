@@ -10,7 +10,7 @@ import pytest
 from conftest import events
 from sqlalchemy import select
 
-from app.db import session_scope
+from app.db import platform_session
 from app.models import AuditEvent, BatchStatus, Claim, Employee, PaymentBatch
 
 NOT_FOUND = {"error": "Not found.", "error_code": "NOT_FOUND"}
@@ -112,7 +112,7 @@ def test_nothing_of_b_was_changed(two_orgs):
     a.post(f"/batches/{ids['batch_id']}/mark-paid", json={"reference": "STOLEN-1"})
     a.post(f"/batches/{ids['batch_id']}/cancel")
     a.post(f"/employees/{ids['employee_id']}/deactivate")
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.get(Employee, ids["employee_id"]).name == "Secret Bekele"
         assert session.get(Employee, ids["employee_id"]).active is True
         assert session.get(Claim, ids["pending_claim_id"]).status == "pending"
@@ -172,7 +172,7 @@ def test_a_batch_cannot_take_another_organisations_claims(two_orgs):
     _approve(b, other["id"])
     resp = a.post("/batches", json={"method": "cbe", "claim_ids": [other["id"]]})
     assert resp.status_code == 409 and resp.json()["error_code"] == "NOT_BATCHABLE"
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.get(Claim, other["id"]).batch_id is None
 
 
@@ -192,7 +192,7 @@ def test_receipt_files_of_another_organisation_are_not_served(two_orgs):
 
 def test_audit_entries_carry_the_organisation(two_orgs):
     a, b = two_orgs["a"], two_orgs["b"]
-    with session_scope() as session:
+    with platform_session() as session:
         rows = list(session.scalars(select(AuditEvent)))
     by_admin = {}
     for row in rows:

@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from app import audit, csvutil, money, validation
 from app.api.common import ADDIS_ABABA, batch_payload, checked, claim_payload, csv_response, today
 from app.auth import Principal, current_admin, fresh_admin
-from app.db import session_scope, utcnow
+from app.db import tenant_session, utcnow
 from app.errors import ApiError
 from app.models import (
     AuditResult, BatchStatus, Claim, ClaimStatus, Employee, Organisation, PaymentBatch, PayoutMethod,
@@ -64,7 +64,7 @@ def list_batches(status: Optional[str] = Query(default=None, max_length=16),
     org = principal.organisation_id
     if status is not None and status not in BatchStatus.ALL:
         raise ApiError(400, f"status must be one of {', '.join(BatchStatus.ALL)}.", "VALIDATION_ERROR")
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         query = select(PaymentBatch).where(PaymentBatch.organisation_id == org)
         if status:
             query = query.where(PaymentBatch.status == status)
@@ -101,7 +101,7 @@ def create_batch(body: BatchIn, principal: Principal = Depends(fresh_admin)) -> 
     org = principal.organisation_id
     method = body.method.strip().lower()
     failure: Optional[ApiError] = None
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         if method not in _enabled_methods(session, org):
             raise ApiError(400, "That payout method is not enabled for your organisation.", "VALIDATION_ERROR")
         organisation = session.scalar(select(Organisation).where(Organisation.id == org).with_for_update())
@@ -158,7 +158,7 @@ def _detail(session, batch: PaymentBatch) -> Dict[str, Any]:
 
 @router.get("/batches/{batch_id}")
 def get_batch(batch_id: str, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         return _detail(session, owned(session, PaymentBatch, batch_id, principal.organisation_id))
 
 
@@ -186,7 +186,7 @@ def _payout_file(session, batch: PaymentBatch) -> str:
 
 @router.get("/batches/{batch_id}/export")
 def export_batch(batch_id: str, principal: Principal = Depends(current_admin)):
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         batch = owned(session, PaymentBatch, batch_id, principal.organisation_id, lock=True)
         text = _payout_file(session, batch)
         first = batch.exported_at is None
@@ -205,7 +205,7 @@ def export_batch(batch_id: str, principal: Principal = Depends(current_admin)):
 def mark_paid(batch_id: str, body: PaidIn, principal: Principal = Depends(fresh_admin)) -> Dict[str, Any]:
     reference = checked(validation.text, body.reference, "The payment reference", min_len=3, max_len=80)
     failure: Optional[ApiError] = None
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         batch = owned(session, PaymentBatch, batch_id, principal.organisation_id, lock=True)
         if batch.status == BatchStatus.PAID:
             failure = ApiError(409, PAID_IS_FINAL, "BATCH_PAID")
@@ -237,7 +237,7 @@ def cancel_batch(batch_id: str, principal: Principal = Depends(fresh_admin)) -> 
     are ready to batch again). A downloaded or paid one never is: its claims
     could otherwise be paid twice."""
     failure: Optional[ApiError] = None
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         batch = owned(session, PaymentBatch, batch_id, principal.organisation_id, lock=True)
         if batch.status == BatchStatus.PAID:
             failure = ApiError(409, PAID_IS_FINAL, "BATCH_PAID")

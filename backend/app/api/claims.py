@@ -20,7 +20,7 @@ from app import audit, money, validation
 from app.api.common import bad, checked, claim_items, claim_payload, like, today
 from app.auth import Principal, current_admin, fresh_admin
 from app.claims_intake import MAX_ITEMS, MAX_QUANTITY, NewClaim, NewItem, create_claim
-from app.db import session_scope, utcnow
+from app.db import tenant_session, utcnow
 from app.errors import ApiError
 from app.models import AuditResult, Claim, ClaimItem, ClaimStatus, Dependant, Employee, PaymentBatch
 from app.policy import assess, claim_code
@@ -103,7 +103,7 @@ def list_claims(
         base.append(or_(*conditions))
     filtered = base + ([Claim.status == status] if status else [])
     joined = select(Claim).join(Employee, Employee.id == Claim.employee_id)
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         total = session.scalar(select(func.count()).select_from(Claim).join(Employee, Employee.id == Claim.employee_id)
                                .where(*filtered)) or 0
         claims = session.scalars(joined.where(*filtered).order_by(Claim.created_at.desc(), Claim.number.desc())
@@ -142,7 +142,7 @@ def create(body: ClaimIn, principal: Principal = Depends(current_admin)) -> Dict
                    receipt_number=receipt_number, receipt_date=body.receipt_date, items=items,
                    receipt_file_id=body.receipt_file_id, created_by=principal.admin_id)
     try:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             claim = create_claim(session, new, today())
             audit.by(session, principal, audit.CLAIM_CREATED, target_type="claim", target_id=claim.id,
                      target_name=claim_code(claim.number),
@@ -156,7 +156,7 @@ def create(body: ClaimIn, principal: Principal = Depends(current_admin)) -> Dict
 
 @router.get("/claims/{claim_id}")
 def get_claim(claim_id: str, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         return _load(session, owned(session, Claim, claim_id, principal.organisation_id))
 
 
@@ -172,7 +172,7 @@ def approve(claim_id: str, principal: Principal = Depends(fresh_admin)) -> Dict[
     org = principal.organisation_id
     failure: Optional[ApiError] = None
     try:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             claim = owned(session, Claim, claim_id, org, lock=True)
             # One approval at a time per employee: the annual limit cannot be overrun.
             session.scalar(select(Employee.id).where(Employee.id == claim.employee_id).with_for_update())
@@ -211,7 +211,7 @@ def approve(claim_id: str, principal: Principal = Depends(fresh_admin)) -> Dict[
 def reject(claim_id: str, body: RejectIn, principal: Principal = Depends(fresh_admin)) -> Dict[str, Any]:
     reason = checked(validation.text, body.reason, "A reason", min_len=3, max_len=1000)
     failure: Optional[ApiError] = None
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         claim = owned(session, Claim, claim_id, principal.organisation_id, lock=True)
         if claim.status != ClaimStatus.PENDING:
             failure = _refuse(session, principal, audit.CLAIM_REJECTED, claim,

@@ -12,7 +12,7 @@ from conftest import (
     make_admin, make_org, password_step, sign_in, start_application,
 )
 
-from app.db import session_scope
+from app.db import platform_session
 from app.models import ApplicationDocument, Organisation
 
 REFUSED = "This application cannot be accepted with these details. Contact Endod if you think this is a mistake."
@@ -49,7 +49,7 @@ def test_starting_makes_a_locked_draft_organisation_signed_in_with_the_password_
     assert [d["kind"] for d in app["documents"]] == ["trade_license", "tin_certificate", "authorization_letter"]
 
     # The organisation is not usable yet: its TIN is a placeholder, never a real one.
-    with session_scope() as session:
+    with platform_session() as session:
         org = session.get(Organisation, me["organisation"]["id"])
         assert not re.fullmatch(r"[0-9]{10}", org.tin)
         assert org.status == "active"
@@ -203,7 +203,7 @@ def test_replacing_a_document_keeps_one_and_removes_the_old_file(applicant, tmp_
     first = applicant.upload("trade_license", PDF, "one.pdf")
     second = applicant.upload("trade_license", PNG, "two.png")
     assert first.status_code == second.status_code == 201
-    with session_scope() as session:
+    with platform_session() as session:
         rows = session.query(ApplicationDocument).filter_by(organisation_id=applicant.org_id).all()
         assert [(r.kind, r.filename) for r in rows] == [("trade_license", "two.png")]
         only = rows[0].id
@@ -280,7 +280,7 @@ def test_applications_never_block_a_tin_only_an_approved_active_organisation_doe
 
 
 def test_a_suspended_organisation_does_not_block_its_tin_for_applicants(client, clock, platform_key, portal):
-    with session_scope() as session:
+    with platform_session() as session:
         tin = session.get(Organisation, portal.org_id).tin
     client.post(f"/platform/organisations/{portal.org_id}/suspend", headers=platform_key,
                 json={"reviewer": "reviewer@endod.example"})

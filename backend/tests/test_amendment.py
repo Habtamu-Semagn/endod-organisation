@@ -15,7 +15,7 @@ from conftest import (
 from sqlalchemy import select, update
 
 from app import onboarding
-from app.db import session_scope, utcnow
+from app.db import platform_session, utcnow
 from app.models import (
     AdminSession, ApplicationDocument, BenefitPolicy, OrgAdmin, Organisation, OrganisationApplication, RecoveryCode,
 )
@@ -130,7 +130,7 @@ def test_a_version_one_microsecond_off_is_refused(client, clock, platform_key):
 # --- expired drafts --------------------------------------------------------------------------
 
 def _age(org_id, days):
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(OrganisationApplication).where(OrganisationApplication.organisation_id == org_id)
                         .values(created_at=utcnow() - timedelta(days=days)))
 
@@ -150,7 +150,7 @@ def test_drafts_not_submitted_within_14_days_are_deleted_with_everything(client,
     # Starting any application sweeps (there is no worker in this deployment).
     assert start_application(client).status_code == 200
 
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.get(Organisation, old.org_id) is None
         assert session.get(OrganisationApplication, old.org_id) is None
         assert session.scalar(select(OrgAdmin).where(OrgAdmin.organisation_id == old.org_id)) is None
@@ -253,14 +253,16 @@ def test_lock_for_change_locks_the_organisation_first(db):
     engine = get_engine()
     event.listen(engine, "before_cursor_execute", record)
     try:
-        with session_scope() as session:
+        with platform_session() as session:
             from conftest import make_org
             real = make_org("Lock Order PLC")
             statements.clear()
             onboarding.lock_for_change(session, real)
     finally:
         event.remove(engine, "before_cursor_execute", record)
-    tables = [re.search(r"FROM (\w+)", s).group(1) for s in statements if s.lstrip().upper().startswith("SELECT")]
+    # (The tenant context each transaction sets first, app.db, reads no table.)
+    tables = [re.search(r"FROM (\w+)", s).group(1) for s in statements
+              if s.lstrip().upper().startswith("SELECT") and "set_config" not in s]
     assert tables[:2] == ["organisations", "organisation_applications"], tables
 
 

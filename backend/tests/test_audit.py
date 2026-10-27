@@ -6,7 +6,7 @@ import json
 from conftest import CLIENT_IP, PASSWORD, events, make_admin, sign_in
 from sqlalchemy import select
 
-from app.db import session_scope
+from app.db import platform_session
 from app.models import AuditEvent
 
 
@@ -36,7 +36,7 @@ def test_a_claims_life_is_audited(portal):
         ("batch_created", "success"), ("batch_exported", "success"), ("batch_paid", "success"),
         ("receipt_viewed", "success"), ("report_exported", "success"), ("employees_exported", "success"),
     ]
-    with session_scope() as session:
+    with platform_session() as session:
         rows = list(session.scalars(select(AuditEvent).where(AuditEvent.admin_email == portal.email)))
     assert all(r.organisation_id == portal.org_id and r.ip == CLIENT_IP and r.admin_id == portal.admin_id
                for r in rows)

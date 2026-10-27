@@ -89,10 +89,10 @@ def test_0003_only_adds_tables_and_existing_organisations_stay_approved(migrated
     engine.dispose()
 
     from app import onboarding
-    from app.db import session_scope
+    from app.db import platform_session
     from app.models import ApplicationStatus
 
-    with session_scope() as session:
+    with platform_session() as session:
         assert onboarding.status_of(onboarding.application_of(session, "c3" * 16)) == ApplicationStatus.APPROVED
     reset_engine()
 

@@ -68,6 +68,16 @@ The design follows the Endod super admin service (`endod-superadmin`).
   organisation (`app/tenancy.py`). An id from another organisation answers `404 Not found.`,
   exactly like an id that does not exist. `backend/tests/test_tenancy.py` tries every
   route that takes an id with another organisation's ids.
+- **Row-level security** (PostgreSQL, migration 0004): a second wall in the database.
+  Every organisation-scoped table has ENABLE and FORCE ROW LEVEL SECURITY and a policy
+  that shows and accepts only the rows of the organisation the transaction acts for
+  (`app.organisation_id`, set at the start of every transaction by `app/db.py`), or every
+  row in the platform scope (`app.scope = 'platform'`: the `/platform` routes, the
+  expired-draft sweep and the CLI, through `platform_session()` only). With neither set,
+  a table shows nothing and takes nothing. Sign-in, session tokens, setup links and a new
+  application learn their organisation from one narrow SECURITY DEFINER function each
+  (`app/rls.py`). `org_app` is neither a superuser nor BYPASSRLS (migrations refuse to
+  run otherwise); `backend/tests/test_rls.py` checks every policy table.
 - **Sign-in**: argon2id passwords and mandatory TOTP (Google Authenticator) with replay
   protection. Admins enrol through one-time setup links; there are 10 recovery codes.
   A company's applicant uses the password only until Endod approves the company; approval
@@ -106,8 +116,9 @@ The design follows the Endod super admin service (`endod-superadmin`).
 - **Audit log**: every sign-in step and every change (with the organisation, admin, address,
   target and result) goes to `audit_events`, which the API's database role can only read
   and append to.
-- **Database roles**: `org_owner` runs the migrations; the API connects as `org_app`
-  (no DDL; `audit_events` is SELECT/INSERT only).
+- **Database roles**: `org_owner` runs the migrations (in the platform scope, since the
+  policies are forced on the owner too); the API connects as `org_app` (no DDL;
+  `audit_events` is SELECT/INSERT only; held to the row-level security policies).
 - **Money** is always an integer number of santim (1 ETB = 100 santim). There are no
   floats, in the API or in the web app.
 - **Receipt files**: PDF, JPEG, PNG or WebP, recognised by their first bytes, at most

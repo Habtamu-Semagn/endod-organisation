@@ -35,11 +35,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
-from app import audit, auth, files, onboarding, security, validation
+from app import audit, auth, files, onboarding, rls, security, validation
 from app.api.common import checked
 from app.auth import Principal, signed_in_admin
 from app.config import get_settings
-from app.db import new_id, session_scope, utcnow
+from app.db import bind_tenant, new_id, platform_session, session_scope, tenant_session, utcnow
 from app.errors import ApiError
 from app.models import (
     ApplicationDocument, ApplicationStatus, AuditResult, BenefitPolicy, DocumentKind, OrgAdmin, Organisation,
@@ -91,15 +91,20 @@ def start(body: StartRequest, request: Request, ip: str = Depends(auth.client_ip
     settings = get_settings()
     now = utcnow()
     failure: Optional[ApiError] = None
+    # Drafts nobody submitted in time go first (their emails become free again):
+    # across organisations, so in the platform scope and its own transaction.
+    with platform_session() as session:
+        onboarding.sweep_expired_drafts(session, now)
     try:
+        # Nobody's yet: whether the email is taken is one SECURITY DEFINER look-up
+        # (app.rls); the new organisation's id is chosen here and bound before
+        # anything is written, so this session can write that organisation only.
         with session_scope() as session:
-            # Drafts nobody submitted in time go first (their emails become free again).
-            onboarding.sweep_expired_drafts(session, now)
             if auth.ip_blocked(session, ip, now, settings) or auth.application_limited(session, ip, now, settings):
                 audit.record(session, audit.APPLICATION_STARTED, AuditResult.FAILURE, ip=ip,
                              admin_email=security.email_fingerprint(email), detail={"reason": "address_rate_limited"})
                 failure = ApiError(429, TOO_MANY_APPLICATIONS, "RATE_LIMITED")
-            elif session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email)) is not None:
+            elif rls.admin_organisation(session, email) is not None:
                 # Probing for accounts costs an attempt, like an application and a failed sign-in.
                 auth.note_ip_failure(session, ip, now)
                 auth.note_application(session, ip, now)
@@ -107,7 +112,10 @@ def start(body: StartRequest, request: Request, ip: str = Depends(auth.client_ip
                              admin_email=security.email_fingerprint(email), detail={"reason": "email_taken"})
                 failure = ApiError(409, EMAIL_REFUSED, "APPLICATION_REFUSED")
             else:
-                org = Organisation(name=legal_name, tin=onboarding.placeholder_tin(), contact_name=full_name,
+                organisation_id = new_id()
+                bind_tenant(session, organisation_id)
+                org = Organisation(id=organisation_id, name=legal_name, tin=onboarding.placeholder_tin(),
+                                   contact_name=full_name,
                                    contact_email=email, contact_phone=phone)
                 session.add(org)
                 session.flush()
@@ -146,7 +154,7 @@ def _organisation(session, principal: Principal, lock: bool = False) -> Organisa
 
 @router.get("")
 def read(principal: Principal = Depends(signed_in_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         return onboarding.application_payload(session, _organisation(session, principal))
 
 
@@ -172,7 +180,7 @@ class CompanyStep(BaseModel):
 
 
 def _save(principal: Principal, step: str, apply) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         org, app = onboarding.lock_for_change(session, principal.organisation_id)
         onboarding.require_editable(app)
         apply(session, org, app)
@@ -213,7 +221,7 @@ def save_company(body: CompanyStep, principal: Principal = Depends(signed_in_adm
     email = _email(body.email, "Company email")
     settings = get_settings()
     now = utcnow()
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         # Probing TINs costs like guessing passwords: the per-address limit applies.
         if auth.ip_blocked(session, principal.ip, now, settings):
             raise ApiError(429, auth.TOO_MANY, "RATE_LIMITED")
@@ -251,7 +259,7 @@ async def upload_document(kind: str, request: Request,
     org_id = principal.organisation_id
 
     def check() -> None:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             onboarding.require_editable(onboarding.application_of(session, org_id))
 
     await run_in_threadpool(check)
@@ -266,7 +274,7 @@ async def upload_document(kind: str, request: Request,
         raise ApiError(exc.status_code, str(exc), code) from exc
 
     def save() -> tuple:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             # Again under the lock: the application may have been submitted meanwhile.
             org, app = onboarding.lock_for_change(session, principal.organisation_id)
             onboarding.require_editable(app)
@@ -329,7 +337,7 @@ def document_of(session, organisation_id: str, kind: str) -> ApplicationDocument
 @router.get("/documents/{kind}")
 def read_document(kind: str, principal: Principal = Depends(signed_in_admin)):
     """The organisation's own document (the organisation comes from the session)."""
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         doc = document_of(session, principal.organisation_id, kind)
         session.expunge(doc)
     return send_document(doc, inline=True)
@@ -340,7 +348,7 @@ def read_document(kind: str, principal: Principal = Depends(signed_in_admin)):
 @router.post("/submit")
 def submit(principal: Principal = Depends(signed_in_admin)) -> Dict[str, Any]:
     refused = False
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         org, app = onboarding.lock_for_change(session, principal.organisation_id)
         onboarding.require_editable(app)
         gaps = onboarding.missing(session, app)

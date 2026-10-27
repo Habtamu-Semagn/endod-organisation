@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app import audit, files
 from app.auth import Principal, current_admin
-from app.db import iso, new_id, session_scope, utcnow
+from app.db import iso, new_id, tenant_session, utcnow
 from app.errors import ApiError
 from app.models import Claim, ReceiptFile
 from app.tenancy import not_found, owned
@@ -46,7 +46,7 @@ async def upload_receipt(request: Request,
     org = principal.organisation_id
 
     def check() -> None:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             attached = select(Claim.receipt_file_id).where(Claim.receipt_file_id.is_not(None))
             waiting = session.scalar(select(func.count()).select_from(ReceiptFile).where(
                 ReceiptFile.organisation_id == org, ReceiptFile.id.not_in(attached),
@@ -66,7 +66,7 @@ async def upload_receipt(request: Request,
         raise ApiError(exc.status_code, str(exc), code) from exc
 
     def save() -> Dict[str, Any]:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             row = ReceiptFile(id=file_id, organisation_id=org, filename=filename, content_type=content_type,
                               size=size, sha256=sha256, uploaded_by=principal.admin_id)
             session.add(row)
@@ -84,7 +84,7 @@ async def upload_receipt(request: Request,
 @router.get("/receipts/{receipt_id}")
 def get_receipt(receipt_id: str, download: bool = Query(default=False),
                 principal: Principal = Depends(current_admin)):
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         row = owned(session, ReceiptFile, receipt_id, principal.organisation_id)
         try:
             path = files.path_for(row.organisation_id, row.id)

@@ -7,7 +7,7 @@ import io
 import pytest
 from sqlalchemy import update
 
-from app.db import session_scope
+from app.db import platform_session
 from app.models import AdminSession
 
 
@@ -132,7 +132,7 @@ def test_the_batch_keeps_the_account_it_was_made_with(portal, ready):
 
 def test_mark_paid_needs_a_fresh_code_and_a_reference(portal, ready):
     batch = portal.post("/batches", json={"method": "cbe"}).json()
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(reauth_at=None))
     resp = portal.post(f"/batches/{batch['id']}/mark-paid", json={"reference": "FT26293ABCDE"})
     assert resp.status_code == 403 and resp.json()["error_code"] == "REAUTH_REQUIRED"

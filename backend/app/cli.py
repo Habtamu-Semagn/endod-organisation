@@ -32,7 +32,7 @@ from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import delete, func, select
 
 from app import audit, auth, security, validation
-from app.db import ensure_aware, session_scope, utcnow
+from app.db import ensure_aware, platform_session, utcnow
 from app.models import AuditResult, BenefitPolicy, Organisation, OrganisationApplication, OrgAdmin, RecoveryCode
 from app.policy import DEFAULT_ANNUAL_LIMIT_SANTIM
 
@@ -70,7 +70,7 @@ def create_org(name: str, tin: str, contact_name: Optional[str] = None, contact_
     except validation.Invalid as exc:
         raise SystemExit(str(exc)) from exc
     contact_email = _email(contact_email) if contact_email else None
-    with session_scope() as session:
+    with platform_session() as session:
         if session.scalar(select(Organisation.id).where(Organisation.tin == tin)) is not None:
             raise SystemExit(f"An organisation with TIN {tin} already exists.")
         org = Organisation(name=name, tin=tin, contact_name=contact_name, contact_email=contact_email,
@@ -97,7 +97,7 @@ def create_admin(organisation_id: str, email: str, name: str, password: Optional
         problem = security.password_problem(password, email)
         if problem:
             raise SystemExit(problem)
-    with session_scope() as session:
+    with platform_session() as session:
         if not re.fullmatch(r"[0-9a-f]{32}", organisation_id or "") or session.get(Organisation, organisation_id) is None:
             raise SystemExit(f"No organisation with id {organisation_id}. See list-orgs.")
         if session.scalar(select(OrgAdmin).where(OrgAdmin.email == email)) is not None:
@@ -116,7 +116,7 @@ def reset_2fa(email: str) -> str:
     """Void the admin's authenticator, recovery codes, password and sessions;
     return a new setup link (the only way back in)."""
     now = utcnow()
-    with session_scope() as session:
+    with platform_session() as session:
         admin = _find(session, email)
         admin.totp_secret = admin.totp_pending_secret = None
         admin.totp_last_step = admin.totp_enrolled_at = None
@@ -131,7 +131,7 @@ def reset_2fa(email: str) -> str:
 
 def disable(email: str) -> None:
     now = utcnow()
-    with session_scope() as session:
+    with platform_session() as session:
         admin = _find(session, email)
         admin.active = False
         auth.revoke_all(session, admin.id, now)
@@ -140,7 +140,7 @@ def disable(email: str) -> None:
 
 
 def list_orgs(out: TextIO) -> None:
-    with session_scope() as session:
+    with platform_session() as session:
         counts = dict(session.execute(select(OrgAdmin.organisation_id, func.count())
                                       .group_by(OrgAdmin.organisation_id)).all())
         applying = dict(session.execute(select(OrganisationApplication.organisation_id, OrganisationApplication.status)
@@ -157,7 +157,7 @@ def list_orgs(out: TextIO) -> None:
 
 def list_admins(out: TextIO, organisation_id: Optional[str] = None) -> None:
     now = utcnow()
-    with session_scope() as session:
+    with platform_session() as session:
         query = select(OrgAdmin, Organisation.name).join(Organisation, Organisation.id == OrgAdmin.organisation_id)
         if organisation_id:
             query = query.where(OrgAdmin.organisation_id == organisation_id)

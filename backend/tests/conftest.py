@@ -39,10 +39,38 @@ class Clock:
         self.now += seconds
 
 
+#: PostgreSQL runs as production does: ORG_TEST_DATABASE_URL is the app role
+#: (org_app, under row-level security), ORG_TEST_OWNER_DATABASE_URL the owner
+#: role, which applies the migrations (once per run) and empties the tables
+#: before every test. Without an owner URL the one URL does both.
+_owner_engine = None
+
+
+def _empty_postgres(monkeypatch, url: str) -> None:
+    global _owner_engine
+    from alembic import command
+    from sqlalchemy import create_engine, text
+
+    from app import db as dbmod
+    from test_migrations import _config
+
+    owner_url = os.environ.get("ORG_TEST_OWNER_DATABASE_URL") or url
+    if _owner_engine is None:
+        monkeypatch.setenv("ORG_DATABASE_URL", owner_url)
+        dbmod.reset_engine()
+        command.upgrade(_config(), "head")
+        dbmod.reset_engine()
+        monkeypatch.setenv("ORG_DATABASE_URL", url)
+        _owner_engine = create_engine(owner_url)
+    tables = ", ".join(f'"{name}"' for name in dbmod.Base.metadata.tables)
+    with _owner_engine.begin() as connection:
+        connection.execute(text(f"TRUNCATE {tables} CASCADE"))
+
+
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     """A fresh database per test: SQLite by default, or the PostgreSQL
-    database in ORG_TEST_DATABASE_URL (emptied before every test)."""
+    database in ORG_TEST_DATABASE_URL (migrated, and emptied before every test)."""
     from app import db as dbmod
     from app import models  # noqa: F401  (registers the tables)
 
@@ -54,8 +82,12 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("BFF_SHARED_SECRET", BFF_SECRET)
     monkeypatch.setenv("ORG_RECEIPTS_DIR", str(tmp_path / "receipts"))
     dbmod.reset_engine()
-    dbmod.Base.metadata.drop_all(dbmod.get_engine())
-    dbmod.create_all()
+    if url.startswith("postgresql"):
+        _empty_postgres(monkeypatch, url)
+    else:
+        dbmod.Base.metadata.drop_all(dbmod.get_engine())
+        dbmod.create_all()
+    dbmod.reset_engine()
     yield
     dbmod.reset_engine()
 
@@ -102,12 +134,12 @@ def make_admin(email="hr@tena.example", name="Selam Tesfaye", password=PASSWORD,
                organisation_id=None):
     """An admin (of a new organisation unless one is given); returns (id, TOTP secret or None)."""
     from app import security, totp
-    from app.db import session_scope
+    from app.db import platform_session
     from app.models import OrgAdmin
 
     organisation_id = organisation_id or make_org()
     secret = totp.new_secret() if enrolled else None
-    with session_scope() as session:
+    with platform_session() as session:
         admin = OrgAdmin(organisation_id=organisation_id, email=email, name=name, active=active,
                          password_hash=security.hash_password(password) if password else None,
                          totp_secret=security.seal(secret) if secret else None)
@@ -117,10 +149,10 @@ def make_admin(email="hr@tena.example", name="Selam Tesfaye", password=PASSWORD,
 
 
 def admin_org(admin_id):
-    from app.db import session_scope
+    from app.db import platform_session
     from app.models import OrgAdmin
 
-    with session_scope() as session:
+    with platform_session() as session:
         return session.get(OrgAdmin, admin_id).organisation_id
 
 
@@ -178,10 +210,10 @@ def enrol_via_link(client, clock, link, password=PASSWORD):
 def events(action=None):
     from sqlalchemy import select
 
-    from app.db import session_scope
+    from app.db import platform_session
     from app.models import AuditEvent
 
-    with session_scope() as session:
+    with platform_session() as session:
         query = select(AuditEvent).order_by(AuditEvent.at)
         if action:
             query = query.where(AuditEvent.action == action)
@@ -223,10 +255,10 @@ class Portal:
         """As if the last fresh code were older than 10 minutes."""
         from sqlalchemy import update
 
-        from app.db import session_scope
+        from app.db import platform_session
         from app.models import AdminSession
 
-        with session_scope() as session:
+        with platform_session() as session:
             session.execute(update(AdminSession).values(reauth_at=None))
 
     def employee(self, **fields):
@@ -399,12 +431,12 @@ def applicant_sign_in(client, email, ip=CLIENT_IP):
 def enrol_directly(email):
     """Give an admin a confirmed authenticator (as the enrolment does); returns its secret."""
     from app import security, totp
-    from app.db import session_scope, utcnow
+    from app.db import platform_session, utcnow
     from app.models import OrgAdmin
     from sqlalchemy import select
 
     secret = totp.new_secret()
-    with session_scope() as session:
+    with platform_session() as session:
         admin = session.scalar(select(OrgAdmin).where(OrgAdmin.email == email))
         admin.totp_secret = security.seal(secret)
         admin.totp_enrolled_at = utcnow()

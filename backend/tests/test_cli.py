@@ -9,7 +9,7 @@ from conftest import enrol_via_link, events, password_step
 from sqlalchemy import select
 
 from app import cli
-from app.db import session_scope
+from app.db import platform_session
 from app.models import AdminSession, BenefitPolicy, Organisation, OrgAdmin
 
 
@@ -31,7 +31,7 @@ def test_create_org_prints_its_id_and_gives_it_the_default_policy(db):
     assert status == 0
     org_id = out.strip().splitlines()[-1]
     assert len(org_id) == 32
-    with session_scope() as session:
+    with platform_session() as session:
         org = session.get(Organisation, org_id)
         assert (org.name, org.tin, org.status, org.contact_email, org.contact_phone) == (
             "Tena Logistics PLC", "0012345678", "active", "hr@tena.example", "+251911223344")
@@ -56,7 +56,7 @@ def test_create_admin_prints_a_setup_link(client):
     assert status == 0
     link = out.strip().splitlines()[-1]
     assert link.startswith("https://organisation.example/setup#") and len(link.split("#")[1]) >= 40
-    with session_scope() as session:
+    with platform_session() as session:
         admin = session.scalar(select(OrgAdmin))
         assert (admin.email, admin.name, admin.organisation_id, admin.password_hash, admin.totp_secret) == (
             "hr@tena.example", "Selam Tesfaye", org_id, None, None)
@@ -83,7 +83,7 @@ def test_create_admin_with_password_from_stdin(client, clock):
     assert "a long passphrase" not in out
     link = out.strip().splitlines()[-1]
     assert "/setup#" in link
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.scalar(select(OrgAdmin.password_hash)).startswith("$argon2id$")
     refused = client.post("/auth/login", json={"email": "hr@tena.example", "password": "a long passphrase"})
     assert refused.status_code == 401 and refused.json()["error"] == "Incorrect email or password."
@@ -104,7 +104,7 @@ def test_password_stdin_follows_the_policy(db):
         run(*base, stdin="short\n")
     with pytest.raises(SystemExit, match="No password"):
         run(*base, stdin="")
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.scalar(select(OrgAdmin)) is None
 
 
@@ -147,7 +147,7 @@ def test_disable(client, clock):
     status, out = run("disable", "--email", "hr@tena.example")
     assert status == 0 and "disabled" in out
     assert client.get("/auth/me", headers=full).status_code == 401
-    with session_scope() as session:
+    with platform_session() as session:
         assert all(s.revoked_at is not None for s in session.scalars(select(AdminSession)))
     with pytest.raises(SystemExit, match="No admin"):
         run("disable", "--email", "nobody@tena.example")
@@ -184,5 +184,5 @@ def test_runs_as_a_module(db, tmp_path):
         input="a long passphrase\n", capture_output=True, text=True, cwd=backend, env=env, timeout=60)
     assert result.returncode == 0, result.stderr
     assert "a long passphrase" not in result.stdout + result.stderr
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.scalar(select(OrgAdmin.email)) == "cli@tena.example"

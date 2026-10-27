@@ -22,7 +22,7 @@ from app.api.common import (
 )
 from app.api.settings import PolicyRules, clean_exclusions, rules_payload
 from app.auth import Principal, current_admin, fresh_admin, require_fresh
-from app.db import session_scope, utcnow
+from app.db import tenant_session, utcnow
 from app.errors import ApiError
 from app.models import (
     BenefitPolicy, Claim, ClaimStatus, Dependant, Employee, Relationship,
@@ -151,7 +151,7 @@ def list_employees(
         filters.append(or_(func.lower(Employee.name).like(pattern), func.lower(Employee.employee_number).like(pattern),
                            func.lower(Employee.department).like(pattern), func.lower(Employee.endod_id).like(pattern),
                            Employee.phone.like(pattern)))
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         total = session.scalar(select(func.count()).select_from(Employee).where(*filters)) or 0
         rows = session.scalars(select(Employee).where(*filters).order_by(Employee.name, Employee.employee_number)
                                .offset((page - 1) * page_size).limit(page_size)).all()
@@ -196,7 +196,7 @@ def create_employee(body: EmployeeIn, principal: Principal = Depends(current_adm
         require_fresh(principal)
     org = principal.organisation_id
     try:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             _unique_or_400(session, org, fields, None)
             employee = Employee(organisation_id=org, **fields)
             session.add(employee)
@@ -214,7 +214,7 @@ def create_employee(body: EmployeeIn, principal: Principal = Depends(current_adm
 @router.get("/employees/export")
 def export_employees(principal: Principal = Depends(current_admin)):
     org = principal.organisation_id
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         rows = session.scalars(select(Employee).where(Employee.organisation_id == org)
                                .order_by(Employee.employee_number)).all()
         text = csvutil.to_csv(
@@ -300,7 +300,7 @@ def _public_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/employees/import/preview")
 def import_preview(body: ImportIn, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         return _public_plan(_plan_import(session, principal.organisation_id, body.csv))
 
 
@@ -311,7 +311,7 @@ def import_commit(body: ImportIn, principal: Principal = Depends(fresh_admin)) -
     org = principal.organisation_id
     failure: Optional[ApiError] = None
     try:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             plan = _plan_import(session, org, body.csv)
             if not plan["valid"]:
                 failure = ApiError(422, f"{plan['summary']['error']} row(s) have errors; fix them and try again. "
@@ -373,7 +373,7 @@ def _detail(session, principal: Principal, employee: Employee) -> Dict[str, Any]
 
 @router.get("/employees/{employee_id}")
 def get_employee(employee_id: str, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         return _detail(session, principal, owned(session, Employee, employee_id, principal.organisation_id))
 
 
@@ -383,7 +383,7 @@ def update_employee(employee_id: str, body: EmployeePatch,
     org = principal.organisation_id
     changes = body.model_dump(exclude_unset=True)
     try:
-        with session_scope() as session:
+        with tenant_session(principal.organisation_id) as session:
             employee = owned(session, Employee, employee_id, org, lock=True)
             current = {k: getattr(employee, k) for k in IMPORT_COLUMNS}
             fields = checked(_clean, {**current, **changes})
@@ -406,7 +406,7 @@ def update_employee(employee_id: str, body: EmployeePatch,
 
 
 def _set_active(employee_id: str, principal: Principal, active: bool) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         employee = owned(session, Employee, employee_id, principal.organisation_id, lock=True)
         if employee.active != active:
             employee.active = active
@@ -435,7 +435,7 @@ def add_dependant(employee_id: str, body: DependantIn, principal: Principal = De
         raise bad(f"Relationship must be one of {', '.join(Relationship.ALL)}.")
     if body.birth_date and body.birth_date > today():
         raise bad("The birth date cannot be in the future.")
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         employee = owned(session, Employee, employee_id, principal.organisation_id)
         dependant = Dependant(organisation_id=principal.organisation_id, employee_id=employee.id, name=name,
                               relationship=relationship, birth_date=body.birth_date)
@@ -450,7 +450,7 @@ def add_dependant(employee_id: str, body: DependantIn, principal: Principal = De
 def remove_dependant(employee_id: str, dependant_id: str,
                      principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
     """Ends a dependant's cover (kept for the claims made for them)."""
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         employee = owned(session, Employee, employee_id, principal.organisation_id)
         dependant = owned(session, Dependant, dependant_id, principal.organisation_id, lock=True)
         if dependant.employee_id != employee.id:
@@ -469,7 +469,7 @@ def put_employee_policy(employee_id: str, body: PolicyRules,
                         principal: Principal = Depends(fresh_admin)) -> Dict[str, Any]:
     excluded = clean_exclusions(body.excluded_medicines)
     org = principal.organisation_id
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         employee = owned(session, Employee, employee_id, org)
         row = employee_override(session, org, employee.id)
         before = rules_payload(row) if row else None
@@ -496,7 +496,7 @@ def put_employee_policy(employee_id: str, body: PolicyRules,
 @router.delete("/employees/{employee_id}/policy")
 def delete_employee_policy(employee_id: str, principal: Principal = Depends(fresh_admin)) -> Dict[str, Any]:
     org = principal.organisation_id
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         employee = owned(session, Employee, employee_id, org)
         row = employee_override(session, org, employee.id)
         if row is not None:

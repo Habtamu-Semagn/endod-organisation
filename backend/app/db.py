@@ -2,6 +2,26 @@
 
 This service has its own database: organisations, their admins, employees,
 policies, claims, payout batches and the audit log.
+
+Tenant context (PostgreSQL row-level security, migration 0004). Every
+organisation-scoped table refuses rows of any organisation but the one the
+transaction acts for, even if a query forgets its ``organisation_id`` filter.
+Each session says who it acts for, and every transaction it begins sets it
+again with ``set_config(..., true)`` (transaction-local: a pooled connection
+never carries it over to the next user):
+
+* ``tenant_session(organisation_id)``: a signed-in admin's request
+  (``app.organisation_id``); the portal routes use only this;
+* ``platform_session()``: Endod acting across organisations (``app.scope =
+  'platform'``): the /platform routes, the expired-draft sweep and the CLI.
+  It is the only way the application sets that scope;
+* ``session_scope()``: nobody yet (sign-in, setup links, a new application):
+  every tenant table answers no rows and refuses every write until
+  ``bind_tenant`` names the organisation, which sign-in learns from one narrow
+  SECURITY DEFINER function (app.auth).
+
+SQLite (development and the default tests) has no row-level security; the
+application's own ``organisation_id`` filters (app.tenancy) are the wall there.
 """
 
 from __future__ import annotations
@@ -11,7 +31,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator, Optional
 
-from sqlalchemy import MetaData, create_engine, event
+from sqlalchemy import MetaData, create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -94,8 +114,69 @@ def reset_engine() -> None:
     _engine = _engine_url = _sessions = None
 
 
+#: Keys of ``Session.info``: the organisation a session acts for, or the platform scope.
+TENANT_KEY = "rls_organisation_id"
+PLATFORM_KEY = "rls_platform"
+PLATFORM_SCOPE = "platform"
+
+_SET_CONTEXT = text("SELECT set_config('app.organisation_id', :org, true), set_config('app.scope', :scope, true)")
+
+
+def _apply_context(session: Session, connection) -> None:
+    if connection.dialect.name != "postgresql":
+        return
+    connection.execute(_SET_CONTEXT, {
+        "org": session.info.get(TENANT_KEY) or "",
+        "scope": PLATFORM_SCOPE if session.info.get(PLATFORM_KEY) else "",
+    })
+
+
+@event.listens_for(Session, "after_begin")
+def _context_on_begin(session: Session, _transaction, connection) -> None:
+    """Every transaction a session begins acts for its tenant (or for nobody)."""
+    _apply_context(session, connection)
+
+
+def bind_tenant(session: Session, organisation_id: str) -> None:
+    """From now on (this transaction and the next) ``session`` acts for
+    ``organisation_id``: once the organisation is known (sign-in, a new
+    application). Never switches a session from one organisation to another."""
+    if not organisation_id or not isinstance(organisation_id, str):
+        raise ValueError("bind_tenant needs an organisation id.")
+    if session.info.get(PLATFORM_KEY):
+        raise RuntimeError("A platform session is not bound to one organisation.")
+    current = session.info.get(TENANT_KEY)
+    if current and current != organisation_id:
+        raise RuntimeError("This session already acts for another organisation.")
+    session.info[TENANT_KEY] = organisation_id
+    if session.in_transaction():
+        _apply_context(session, session.connection())
+
+
+@contextmanager
+def tenant_session(organisation_id: str) -> Iterator[Session]:
+    """A session acting for one organisation: a signed-in admin's request."""
+    if not organisation_id or not isinstance(organisation_id, str):
+        raise ValueError("tenant_session needs an organisation id.")
+    with session_scope() as session:
+        session.info[TENANT_KEY] = organisation_id
+        yield session
+
+
+@contextmanager
+def platform_session() -> Iterator[Session]:
+    """A session acting for Endod across every organisation. Only the
+    /platform routes (behind the platform key), the expired-draft sweep and
+    the operator CLI use it."""
+    with session_scope() as session:
+        session.info[PLATFORM_KEY] = True
+        yield session
+
+
 @contextmanager
 def session_scope() -> Iterator[Session]:
+    """A session acting for nobody: on PostgreSQL the tenant tables show no
+    rows and take no writes until ``bind_tenant``."""
     get_engine()
     session = _sessions()
     try:
