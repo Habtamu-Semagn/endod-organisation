@@ -19,7 +19,7 @@ from conftest import (
 )
 from sqlalchemy import select, update
 
-from app.db import session_scope, utcnow
+from app.db import platform_session, utcnow
 from app.models import AdminSession, OrgAdmin
 
 ID = "a1" * 16
@@ -67,7 +67,7 @@ def test_the_route_list_is_complete():
 
 
 def _admin(email):
-    with session_scope() as session:
+    with platform_session() as session:
         admin = session.scalar(select(OrgAdmin).where(OrgAdmin.email == email))
         session.expunge(admin)
         return admin
@@ -109,7 +109,7 @@ def test_an_applicant_session_reaches_nothing_but_the_application(client, clock,
 
 def test_an_applicant_session_lives_as_long_as_a_full_one(client, clock):
     a = Applicant(client, clock)
-    with session_scope() as session:
+    with platform_session() as session:
         row = session.scalar(select(AdminSession).where(AdminSession.stage == "applicant"))
         assert row.expires_at - row.created_at == timedelta(hours=12)
         # The idle timeout applies as to every session.
@@ -122,7 +122,7 @@ def test_an_applicant_session_of_an_approved_organisation_reaches_nothing(client
     a = Applicant(client, clock)
     a.complete()
     assert approve_application(client, platform_key, a.org_id).status_code == 200
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(revoked_at=None))
     for method, template, path in ROUTES:
         kind = _kind(method, template)
@@ -157,7 +157,7 @@ def test_approval_revokes_every_session_of_the_organisations_admins_and_audits_i
     assert approve_application(client, platform_key, a.org_id).status_code == 200
     for headers in (a.headers, second, other, pending):
         resp = client.get("/auth/me", headers=headers)
-        assert resp.status_code == 401 and resp.json()["error_code"] == "SESSION_ENDED"
+        assert resp.status_code == 401 and resp.json()["error_code"] == "AUTH_REQUIRED"  # revoked: names no organisation
     # Other organisations' sessions are untouched.
     assert elsewhere.get("/application").status_code == 200
     assert portal.get("/overview").status_code == 200
@@ -250,7 +250,7 @@ def test_the_account_backoff_applies_to_applicant_sign_in(client, clock):
     assert "backoff_without_second_factor" in events("sign_in")[-1][4]
     assert _admin(a.email).failed_attempts == 3
 
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(OrgAdmin).values(backoff_until=utcnow() - timedelta(seconds=1)))
     assert applicant_sign_in(client, a.email)
     admin = _admin(a.email)
@@ -262,7 +262,7 @@ def test_five_failures_lock_the_address_for_the_applicants_account(client, clock
     for _ in range(5):
         client.post("/auth/login", json={"email": a.email, "password": "wrong-password-1"}, headers=from_ip("203.0.113.7"))
     assert events("account_locked")
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(OrgAdmin).values(backoff_until=None))
     refused = client.post("/auth/login", json={"email": a.email, "password": PASSWORD}, headers=from_ip("203.0.113.7"))
     assert refused.status_code == 401

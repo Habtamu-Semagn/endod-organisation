@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.api.common import today
 from app.auth import Principal, current_admin
-from app.db import session_scope
+from app.db import tenant_session
 from app.models import Claim, ClaimStatus, Employee
 from app.policy import default_policy, policy_year
 
@@ -19,7 +19,7 @@ router = APIRouter(tags=["overview"])
 @router.get("/overview")
 def overview(principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
     org = principal.organisation_id
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         base = default_policy(session, org)
         start, end = policy_year(today(), base.year_start_month, base.year_start_day)
         in_year = [Claim.organisation_id == org, Claim.receipt_date >= start, Claim.receipt_date <= end]

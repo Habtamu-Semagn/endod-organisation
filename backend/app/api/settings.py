@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app import audit, money
 from app.api.common import checked, today
 from app.auth import Principal, current_admin, fresh_admin
-from app.db import iso, session_scope, utcnow
+from app.db import iso, tenant_session, utcnow
 from app.errors import ApiError
 from app.models import BenefitPolicy, Organisation, PayoutMethod
 from app.policy import MAX_EXCLUSIONS, check_year_start, default_policy, exclusions, policy_year
@@ -69,7 +69,7 @@ def _organisation_payload(o: Organisation) -> Dict[str, Any]:
 
 @router.get("/policy")
 def get_policy(principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         p = default_policy(session, principal.organisation_id)
         start, end = policy_year(today(), p.year_start_month, p.year_start_day)
         return {**rules_payload(p), "year_start_month": p.year_start_month, "year_start_day": p.year_start_day,
@@ -83,7 +83,7 @@ def put_policy(body: PolicyIn, principal: Principal = Depends(fresh_admin)) -> D
     except ValueError as exc:
         raise ApiError(400, str(exc), "VALIDATION_ERROR") from exc
     excluded = clean_exclusions(body.excluded_medicines)
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         p = default_policy(session, principal.organisation_id)
         before = _rules_snapshot(p)
         p.annual_limit_santim = body.annual_limit_santim
@@ -101,7 +101,7 @@ def put_policy(body: PolicyIn, principal: Principal = Depends(fresh_admin)) -> D
 
 @router.get("/organisation")
 def get_organisation(principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         return _organisation_payload(session.get(Organisation, principal.organisation_id))
 
 
@@ -121,7 +121,7 @@ def put_payout(body: PayoutIn, principal: Principal = Depends(fresh_admin)) -> D
     debit = (body.debit_account or "").replace(" ", "").replace("-", "") or None
     if debit is not None and not re.fullmatch(r"[0-9]{8,20}", debit):
         raise ApiError(400, "The debit account must be 8-20 digits.", "VALIDATION_ERROR")
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         org = session.scalar(select(Organisation).where(Organisation.id == principal.organisation_id))
         before = {"debit_account": org.payout_debit_account, "methods": org.payout_methods}
         org.payout_debit_account = debit

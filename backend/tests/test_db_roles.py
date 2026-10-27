@@ -36,6 +36,8 @@ def _refused(connection, sql, params=None):
 def test_the_app_role_reads_and_writes_the_app_tables(app_conn):
     row_id = uuid.uuid4().hex
     with app_conn.begin():
+        # Row-level security (migration 0004): acting for that organisation.
+        app_conn.execute(text("SELECT set_config('app.organisation_id', :id, true)"), {"id": row_id})
         app_conn.execute(text("INSERT INTO organisations (id, name, tin, status, payout_methods, next_claim_number, next_batch_number, created_at) "
                               "VALUES (:id, 'Role Test', :tin, 'active', 'cbe', 1, 1, now())"),
                          {"id": row_id, "tin": row_id[:10]})
@@ -44,13 +46,34 @@ def test_the_app_role_reads_and_writes_the_app_tables(app_conn):
 
 
 def test_the_app_role_can_only_append_to_the_audit_log(app_conn):
+    row_id = uuid.uuid4().hex
     with app_conn.begin():
-        app_conn.execute(text("INSERT INTO audit_events (id, at, action, result) VALUES (:id, now(), 'sign_in', 'success')"),
-                         {"id": uuid.uuid4().hex})
+        # A tenant appends its own organisation's events (row-level security, migration 0004).
+        app_conn.execute(text("SELECT set_config('app.organisation_id', :o, true)"), {"o": row_id})
+        app_conn.execute(text("INSERT INTO audit_events (id, at, organisation_id, action, result) "
+                              "VALUES (:id, now(), :o, 'sign_in', 'success')"), {"id": uuid.uuid4().hex, "o": row_id})
+        assert app_conn.execute(text("SELECT count(*) FROM audit_events")).scalar() == 1
+    with app_conn.begin():
+        # The platform role reads every event.
+        app_conn.execute(text("SET LOCAL ROLE org_platform"))
         assert app_conn.execute(text("SELECT count(*) FROM audit_events")).scalar() >= 1
     _refused(app_conn, "UPDATE audit_events SET result = 'failure'")
     _refused(app_conn, "DELETE FROM audit_events")
     _refused(app_conn, "TRUNCATE audit_events")
+    for statement in ("UPDATE audit_events SET result = 'failure'", "DELETE FROM audit_events"):
+        with pytest.raises(ProgrammingError):
+            with app_conn.begin():
+                app_conn.execute(text("SET LOCAL ROLE org_platform"))
+                app_conn.execute(text(statement))
+
+
+def test_the_app_role_cannot_bypass_row_level_security(app_conn):
+    with app_conn.begin():
+        flags = app_conn.execute(text("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")).one()
+    assert tuple(flags) == (False, False)
+    _refused(app_conn, "ALTER TABLE claims DISABLE ROW LEVEL SECURITY")
+    _refused(app_conn, "ALTER TABLE claims NO FORCE ROW LEVEL SECURITY")
+    _refused(app_conn, "DROP POLICY tenant_isolation ON claims")
 
 
 def test_the_app_role_cannot_change_the_schema(app_conn):

@@ -3,6 +3,10 @@ one-time setup link; server-side sessions; throttling; re-authentication.
 
 Every admin belongs to exactly one organisation; the session carries its id
 (Principal.organisation_id) and every query of the portal API filters on it.
+On PostgreSQL the database enforces it as well (row-level security, app.db):
+a request's transactions act for that organisation only. The password step,
+a session token and a setup link learn their organisation first from one
+narrow SECURITY DEFINER look-up each (app.rls), then read as it.
 A suspended organisation's admins cannot sign in, and their sessions end.
 An organisation whose application (app.onboarding) is not approved is
 *locked*: its admins reach only the application, the sign-in steps and
@@ -53,9 +57,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Depends, Header, Request
 from sqlalchemy import delete, func, select, update
 
-from app import audit, security, totp
+from app import audit, rls, security, totp
 from app.config import Settings, get_settings
-from app.db import ensure_aware, iso, session_scope, utcnow
+from app.db import bind_tenant, ensure_aware, iso, session_scope, tenant_session, utcnow
 from app.errors import ApiError
 from app.models import (
     AdminSession, ApplicationStatus, AuditResult, AuthFailure, LoginThrottle, OrgAdmin, Organisation,
@@ -351,6 +355,8 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
     now = utcnow()
     email = _normal_email(email)
     failure: Optional[ApiError] = None
+    from app import onboarding
+    # Nobody's yet: the email names the organisation (one SECURITY DEFINER look-up, app.rls).
     with session_scope() as session:
         if _ip_blocked(session, ip, now, settings):
             security.verify_password(password, security.DUMMY_HASH)
@@ -358,10 +364,11 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
                          detail={"step": "password", "reason": "address_rate_limited"})
             failure = ApiError(429, TOO_MANY, "RATE_LIMITED")
         else:
-            # A draft nobody submitted in time is deleted before anyone signs in to it.
-            from app import onboarding
-            onboarding.sweep_expired_drafts(session, now)
-            found = session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email))
+            organisation_id = rls.admin_organisation(session, email)
+            if organisation_id is not None:
+                bind_tenant(session, organisation_id)
+            # Only an active admin is looked up at all (the same on SQLite as under row-level security).
+            found = session.scalar(select(OrgAdmin.id).where(OrgAdmin.email == email)) if organisation_id else None
             admin = _locked_admin(session, found) if found else None
             reason: Optional[str] = None
             counted = False
@@ -377,6 +384,10 @@ def login(email: str, password: str, ip: str, user_agent: Optional[str]) -> Open
                     reason = "account_disabled"
                 elif not _organisation_active(session, admin.organisation_id):
                     reason = "organisation_suspended"
+                elif onboarding.expired(onboarding.application_of(session, admin.organisation_id), now):
+                    # A draft nobody submitted in time: never signed in to again; the
+                    # periodic sweep deletes it (app.onboarding.sweep_now).
+                    reason = "application_expired"
                 elif not admin.totp_secret:
                     applying = _applying(session, admin.organisation_id)
                     approved_applicant = not applying and _approved_applicant(session, admin)
@@ -446,13 +457,20 @@ def resolve(token: str, ip: str) -> Principal:
     longer than the idle timeout; refreshes the idle clock otherwise."""
     settings = get_settings()
     now = utcnow()
+    hashed = security.token_hash(token)
     with session_scope() as session:
+        # The token names the organisation (one SECURITY DEFINER look-up, app.rls);
+        # everything else is read as that organisation.
+        organisation_id = rls.session_organisation(session, hashed)
+        if organisation_id is None:
+            raise ApiError(401, SESSION_REQUIRED, "AUTH_REQUIRED")
+        bind_tenant(session, organisation_id)
         row = session.execute(
             select(AdminSession, OrgAdmin, Organisation, OrganisationApplication.status)
             .join(OrgAdmin, OrgAdmin.id == AdminSession.admin_id)
             .join(Organisation, Organisation.id == OrgAdmin.organisation_id)
             .outerjoin(OrganisationApplication, OrganisationApplication.organisation_id == Organisation.id)
-            .where(AdminSession.token_hash == security.token_hash(token))
+            .where(AdminSession.token_hash == hashed)
         ).first()
         if row is None:
             raise ApiError(401, SESSION_REQUIRED, "AUTH_REQUIRED")
@@ -502,7 +520,7 @@ def require_fresh(principal: Principal) -> None:
 
 def logout(principal: Principal) -> None:
     now = utcnow()
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         _revoke(session, principal.session_id, now)
         audit.by(session, principal, audit.SIGN_OUT, SUCCESS)
 
@@ -539,7 +557,7 @@ def complete_sign_in(principal: Principal, code: Optional[str], recovery_code: O
     now = utcnow()
     ip = principal.ip
     failure: Optional[ApiError] = None
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         admin = _locked_admin(session, principal.admin_id)
         if _ip_blocked(session, ip, now, settings):
             audit.record(session, audit.SIGN_IN, FAILURE, organisation_id=admin.organisation_id, admin_id=admin.id, admin_email=admin.email, ip=ip,
@@ -593,7 +611,7 @@ def enrolment_start(principal: Principal) -> Dict[str, Any]:
     Asking again shows the same secret until it is confirmed."""
     if principal.stage != SessionStage.ENROLL:
         raise ApiError(409, "Two-factor sign-in is already set up.", "WRONG_STAGE")
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         admin = _locked_admin(session, principal.admin_id)
         if admin.totp_pending_secret:
             secret = security.unseal(admin.totp_pending_secret)
@@ -615,7 +633,7 @@ def enrolment_confirm(principal: Principal, code: str, user_agent: Optional[str]
     ip = principal.ip
     failure: Optional[ApiError] = None
     audited = False
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         admin = _locked_admin(session, principal.admin_id)
         if _ip_blocked(session, ip, now, settings):
             failure = ApiError(429, TOO_MANY, "RATE_LIMITED")
@@ -679,7 +697,7 @@ def reauthenticate(principal: Principal, code: str) -> datetime:
     now = utcnow()
     ip = principal.ip
     failure: Optional[ApiError] = None
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         admin = _locked_admin(session, principal.admin_id)
         if _ip_blocked(session, ip, now, settings):
             failure = ApiError(429, TOO_MANY, "RATE_LIMITED")
@@ -728,7 +746,13 @@ def issue_setup_link(session, admin: OrgAdmin, now: Optional[datetime] = None) -
 
 
 def _setup_row(session, token: str, now: datetime, lock: bool = False) -> Optional[Tuple[SetupToken, OrgAdmin]]:
-    query = select(SetupToken).where(SetupToken.token_hash == security.token_hash(token))
+    hashed = security.token_hash(token)
+    # The link names the organisation (one SECURITY DEFINER look-up, app.rls).
+    organisation_id = rls.setup_link_organisation(session, hashed)
+    if organisation_id is None:
+        return None
+    bind_tenant(session, organisation_id)
+    query = select(SetupToken).where(SetupToken.token_hash == hashed)
     if lock:
         query = query.with_for_update()
     link = session.scalar(query)

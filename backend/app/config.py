@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     ORG_APPLICATIONS_PER_IP: int = 5
     ORG_APPLICATION_WINDOW_MINUTES: int = 60
 
+    #: Expired drafts (app.onboarding) are swept at most this often: by a
+    #: background task of the API, and when Endod lists applications. 0: every time.
+    ORG_SWEEP_INTERVAL_SECONDS: int = 600
+
     #: Endod's super admin sends it as X-Platform-Key to /platform/* (the
     #: application review API, docs/company-onboarding.md). Unset (or shorter
     #: than 32 characters): every /platform route answers 503.

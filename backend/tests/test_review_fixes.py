@@ -12,7 +12,7 @@ from datetime import timedelta
 from conftest import bearer, code, events, from_ip, make_admin, password_step, sign_in
 from sqlalchemy import select, update
 
-from app.db import session_scope, utcnow
+from app.db import platform_session, utcnow
 from app.models import AuditEvent, Claim, OrgAdmin, PaymentBatch
 
 
@@ -109,7 +109,7 @@ def test_a_downloaded_batch_cannot_be_cancelled(portal):
     assert portal.get(f"/batches/{batch['id']}/export").status_code == 200
     detail = portal.get(f"/batches/{batch['id']}").json()
     assert detail["exported_at"] is not None
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.get(PaymentBatch, batch["id"]).exported_by == portal.admin_id
     resp = portal.post(f"/batches/{batch['id']}/cancel")
     assert resp.status_code == 409 and resp.json()["error_code"] == "BATCH_EXPORTED"
@@ -161,11 +161,11 @@ def test_wrong_codes_from_many_addresses_pause_code_attempts_for_the_account(cli
     assert resp.status_code == 429 and resp.json()["error_code"] == "CODE_BACKOFF"
     assert "account_code_backoff" in events("sign_in")[-1][4]
     # The pending session is not ended; after the pause the right code works and clears the count.
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(OrgAdmin).values(code_backoff_until=utcnow() - timedelta(seconds=1)))
     resp = client.post("/auth/totp", json={"code": code(secret, clock)}, headers={**pending, **from_ip(ip)})
     assert resp.status_code == 200
-    with session_scope() as session:
+    with platform_session() as session:
         admin = session.scalar(select(OrgAdmin))
         assert (admin.code_failures, admin.code_backoff_until) == (0, None)
 
@@ -238,7 +238,7 @@ def test_every_audit_event_of_a_known_admin_names_the_organisation(client, clock
     link = cli.create_admin(org, "setup@tena.example", "Setup Admin")
     token = link.split("#", 1)[1]
     client.post("/auth/setup", json={"token": token, "password": "a long passphrase"})
-    with session_scope() as session:
+    with platform_session() as session:
         rows = list(session.scalars(select(AuditEvent).where(AuditEvent.admin_id.is_not(None))))
     assert rows and all(r.organisation_id == org for r in rows)
     assert "setup_completed" in {r.action for r in rows}
@@ -272,6 +272,6 @@ def test_rounding_to_zero_is_not_paid_either(portal):
     assert batch["claim_count"] == 1
     lines = list(csv.reader(io.StringIO(portal.get(f"/batches/{batch['id']}/export").text.lstrip("﻿"))))
     assert len(lines) == 2 and all(row[3] != "0.00" for row in lines[1:])
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.get(Claim, claim["id"]).batch_id is None
 

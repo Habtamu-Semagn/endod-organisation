@@ -9,7 +9,7 @@ from conftest import (
 from sqlalchemy import select, update
 
 from app.auth import INVALID_LOGIN
-from app.db import session_scope, utcnow
+from app.db import platform_session, utcnow
 from app.models import OrgAdmin, AdminSession, AuditEvent, LoginThrottle, RecoveryCode
 
 OTHER_IP = "203.0.113.50"
@@ -60,7 +60,7 @@ def test_wrong_email_and_wrong_password_answer_the_same(client):
     failures = events("sign_in")
     assert len(failures) == 5 and all(result == "failure" for _, result, *_ in failures)
     reasons = [json.loads(f[4])["reason"] for f in failures]
-    assert reasons == ["unknown_email", "wrong_password", "account_disabled", "not_enrolled", "not_enrolled"]
+    assert reasons == ["unknown_email", "wrong_password", "unknown_email", "not_enrolled", "not_enrolled"]  # disabled: not looked up
 
 
 def test_unknown_emails_are_logged_only_as_a_keyed_hash(client):
@@ -69,7 +69,7 @@ def test_unknown_emails_are_logged_only_as_a_keyed_hash(client):
     logged = events("sign_in")
     assert logged[0][2] == logged[1][2]  # the same name, recognisable
     assert logged[0][2].startswith("unknown:") and len(logged[0][2]) == len("unknown:") + 8
-    with session_scope() as session:
+    with platform_session() as session:
         dump = repr([(e.admin_email, e.detail, e.target_name) for e in session.scalars(select(AuditEvent))])
     assert "someone" not in dump.lower() and "this.example" not in dump.lower()
 
@@ -111,7 +111,7 @@ def test_five_failures_lock_that_address_for_that_account_only(client, clock):
     # The admin, from another address, still signs in with password and code.
     sign_in(client, clock, secret, ip=OTHER_IP)
     # And the lock ends after 15 minutes.
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(LoginThrottle).values(locked_until=utcnow() - timedelta(seconds=1)))
     assert password_step(client)["stage"] == "totp"
 
@@ -133,7 +133,7 @@ def test_backoff_hides_whether_a_password_is_right(client, clock):
     # The right password and a code still work, from a new address.
     headers = sign_in(client, clock, secret, ip="192.0.2.77")
     assert client.get("/auth/me", headers=headers).status_code == 200
-    with session_scope() as session:
+    with platform_session() as session:
         admin = session.scalar(select(OrgAdmin))
         assert admin.backoff_until is None and admin.failed_attempts == 0
 
@@ -182,13 +182,13 @@ def test_the_client_address_comes_only_from_the_bff_header(client, monkeypatch):
     # X-Forwarded-For is ignored: both failures came from the BFF's client address.
     assert client.post("/auth/login", json={"email": "x@endod.example", "password": "whatever-1"},
                        headers={"X-Forwarded-For": "198.51.100.7"}).status_code == 429
-    with session_scope() as session:
+    with platform_session() as session:
         assert {e.ip for e in session.scalars(select(AuditEvent))} == {CLIENT_IP}
     # Not an address: recorded as unknown, never as the text sent.
     client.post("/auth/login", json={"email": "y@endod.example", "password": "whatever-1"},
                 headers={"X-Endod-Client-IP": "<script>"})
     assert events("sign_in")[-1][2].startswith("unknown:")
-    with session_scope() as session:
+    with platform_session() as session:
         assert "unknown" in {e.ip for e in session.scalars(select(AuditEvent))}
 
 
@@ -247,7 +247,7 @@ def test_enrolment_through_the_setup_link(client, clock):
     assert client.get("/overview", headers=bearer(body["session_token"])).status_code == 200
     assert client.get("/auth/me", headers=headers).status_code == 401  # rotated
 
-    with session_scope() as session:
+    with platform_session() as session:
         admin = session.scalar(select(OrgAdmin).where(OrgAdmin.email == "new@endod.example"))
         assert admin.totp_pending_secret is None and start["secret"] not in admin.totp_secret
         stored = [r.code_hash for r in session.scalars(select(RecoveryCode))]
@@ -285,7 +285,7 @@ def test_idle_timeout(client, clock):
     _, secret = make_admin()
     headers = sign_in(client, clock, secret)
     assert client.get("/auth/me", headers=headers).status_code == 200
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(last_seen_at=utcnow() - timedelta(minutes=31)))
     resp = client.get("/auth/me", headers=headers)
     assert resp.status_code == 401 and resp.json()["error_code"] == "SESSION_ENDED"
@@ -294,7 +294,7 @@ def test_idle_timeout(client, clock):
 def test_activity_keeps_the_session_alive(client, clock):
     _, secret = make_admin()
     headers = sign_in(client, clock, secret)
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(last_seen_at=utcnow() - timedelta(minutes=29)))
     assert client.get("/auth/me", headers=headers).status_code == 200
 
@@ -302,7 +302,7 @@ def test_activity_keeps_the_session_alive(client, clock):
 def test_absolute_limit(client, clock):
     _, secret = make_admin()
     headers = sign_in(client, clock, secret)
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(expires_at=utcnow() - timedelta(seconds=1)))
     assert client.get("/auth/me", headers=headers).status_code == 401
 
@@ -310,7 +310,7 @@ def test_absolute_limit(client, clock):
 def test_pending_session_expires(client):
     make_admin()
     pending = password_step(client)
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(expires_at=utcnow() - timedelta(seconds=1)))
     assert client.post("/auth/totp", json={"code": "123456"},
                        headers=bearer(pending["session_token"])).status_code == 401
@@ -327,7 +327,7 @@ def test_sign_out_revokes(client, clock):
 def test_a_disabled_admin_is_signed_out(client, clock):
     admin_id, secret = make_admin()
     headers = sign_in(client, clock, secret)
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(OrgAdmin).where(OrgAdmin.id == admin_id).values(active=False))
     assert client.get("/auth/me", headers=headers).status_code == 401
 
@@ -364,7 +364,7 @@ def test_reauth_lasts_ten_minutes(client, clock):
     _, secret = make_admin()
     headers = sign_in(client, clock, secret)
     reauth(client, clock, secret, headers)
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(reauth_at=utcnow() - timedelta(minutes=10, seconds=1)))
     resp = client.put("/policy", json=POLICY, headers=headers)
     assert resp.status_code == 403 and resp.json()["error_code"] == "REAUTH_REQUIRED"
@@ -435,7 +435,7 @@ def test_setup_link_for_an_admin_with_a_password_asks_for_it(client, clock):
     # A wrong password does not use the link up; the right one does.
     assert client.post("/auth/setup/check", json={"token": token}).status_code == 200
     headers, secret, _ = enrol_via_link(client, clock, link)
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.scalar(select(OrgAdmin.password_hash)).startswith("$argon2id$")
     assert sign_in(client, clock, secret, email="pw@endod.example")
 
@@ -474,7 +474,7 @@ def test_a_setup_link_is_claimed_once_under_concurrency(client):
     for thread in threads:
         thread.join(timeout=60)
     assert results.count("ok") == 1, results
-    with session_scope() as session:
+    with platform_session() as session:
         sessions = list(session.scalars(select(AdminSession)))
     assert len(sessions) == 1
     assert len(events("setup_completed")) == 1
@@ -485,7 +485,7 @@ def test_expired_setup_link(client):
     from app.models import SetupToken
 
     token = setup_token(cli.create_admin(make_org(), "fresh@endod.example", "Fresh Admin"))
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(SetupToken).values(expires_at=utcnow() - timedelta(seconds=1)))
     resp = client.post("/auth/setup/check", json={"token": token})
     assert resp.status_code == 400 and resp.json()["error_code"] == "INVALID_SETUP_LINK"
@@ -498,7 +498,7 @@ def test_setup_link_is_valid_for_24_hours(client):
     from app.models import SetupToken
 
     cli.create_admin(make_org(), "fresh@endod.example", "Fresh Admin")
-    with session_scope() as session:
+    with platform_session() as session:
         link = session.scalar(select(SetupToken))
         lifetime = link.expires_at - link.created_at
     assert timedelta(hours=23, minutes=59) < lifetime <= timedelta(hours=24)
@@ -527,7 +527,7 @@ def test_a_suspended_organisation_cannot_sign_in_and_its_sessions_end(client, cl
     org_id = make_org()
     _, secret = make_admin(organisation_id=org_id)
     headers = sign_in(client, clock, secret)
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(Organisation).where(Organisation.id == org_id).values(status="suspended"))
     assert client.get("/auth/me", headers=headers).status_code == 401
     resp = _login(client)

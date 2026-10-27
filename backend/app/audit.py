@@ -9,6 +9,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import Request
 
+from app import rls
+from app.db import PLATFORM_KEY, new_id, utcnow
 from app.models import AuditEvent, AuditResult
 
 # Sign-in and accounts.
@@ -88,13 +90,22 @@ def record(session, action: str, result: str, *, organisation_id: Optional[str] 
            detail: Optional[Dict[str, Any]] = None) -> None:
     assert result in AuditResult.ALL
     assert action in ACTIONS, action
-    session.add(AuditEvent(
-        action=action, result=result, organisation_id=organisation_id, admin_id=admin_id,
+    event = AuditEvent(
+        id=new_id(), at=utcnow(), action=action, result=result, organisation_id=organisation_id, admin_id=admin_id,
         admin_email=(admin_email or "")[:254] or None, ip=(ip or "")[:64] or None,
         target_type=target_type, target_id=(target_id or "")[:64] or None,
         target_name=(target_name or "")[:200] or None,
         detail=json.dumps(detail, ensure_ascii=False)[:4000] if detail else None,
-    ))
+    )
+    if organisation_id is None and not session.info.get(PLATFORM_KEY) and rls.postgres(session):
+        # A tenant appends only its own organisation's events (row-level
+        # security); one that concerns no organisation goes through the one
+        # function that may append it (organisation and admin always empty).
+        assert admin_id is None, "an event of an admin names the admin's organisation"
+        session.flush()  # keep the order of the events before it
+        rls.record_orgless_event(session, event)
+        return
+    session.add(event)
 
 
 def by(session, principal, action: str, result: str = AuditResult.SUCCESS, **kwargs) -> None:

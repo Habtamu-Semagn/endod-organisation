@@ -19,6 +19,7 @@ admin has enrolled, signing in with the password alone is refused:
     python -m app.cli disable --email hr@example.et     # signs them out everywhere
     python -m app.cli list-orgs
     python -m app.cli list-admins [--org <organisation id>]
+    python -m app.cli sweep-drafts                      # delete expired drafts now (cron; the API also does it)
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import delete, func, select
 
 from app import audit, auth, security, validation
-from app.db import ensure_aware, session_scope, utcnow
+from app.db import ensure_aware, platform_session, utcnow
 from app.models import AuditResult, BenefitPolicy, Organisation, OrganisationApplication, OrgAdmin, RecoveryCode
 from app.policy import DEFAULT_ANNUAL_LIMIT_SANTIM
 
@@ -70,7 +71,7 @@ def create_org(name: str, tin: str, contact_name: Optional[str] = None, contact_
     except validation.Invalid as exc:
         raise SystemExit(str(exc)) from exc
     contact_email = _email(contact_email) if contact_email else None
-    with session_scope() as session:
+    with platform_session() as session:
         if session.scalar(select(Organisation.id).where(Organisation.tin == tin)) is not None:
             raise SystemExit(f"An organisation with TIN {tin} already exists.")
         org = Organisation(name=name, tin=tin, contact_name=contact_name, contact_email=contact_email,
@@ -97,7 +98,7 @@ def create_admin(organisation_id: str, email: str, name: str, password: Optional
         problem = security.password_problem(password, email)
         if problem:
             raise SystemExit(problem)
-    with session_scope() as session:
+    with platform_session() as session:
         if not re.fullmatch(r"[0-9a-f]{32}", organisation_id or "") or session.get(Organisation, organisation_id) is None:
             raise SystemExit(f"No organisation with id {organisation_id}. See list-orgs.")
         if session.scalar(select(OrgAdmin).where(OrgAdmin.email == email)) is not None:
@@ -116,7 +117,7 @@ def reset_2fa(email: str) -> str:
     """Void the admin's authenticator, recovery codes, password and sessions;
     return a new setup link (the only way back in)."""
     now = utcnow()
-    with session_scope() as session:
+    with platform_session() as session:
         admin = _find(session, email)
         admin.totp_secret = admin.totp_pending_secret = None
         admin.totp_last_step = admin.totp_enrolled_at = None
@@ -131,7 +132,7 @@ def reset_2fa(email: str) -> str:
 
 def disable(email: str) -> None:
     now = utcnow()
-    with session_scope() as session:
+    with platform_session() as session:
         admin = _find(session, email)
         admin.active = False
         auth.revoke_all(session, admin.id, now)
@@ -140,7 +141,7 @@ def disable(email: str) -> None:
 
 
 def list_orgs(out: TextIO) -> None:
-    with session_scope() as session:
+    with platform_session() as session:
         counts = dict(session.execute(select(OrgAdmin.organisation_id, func.count())
                                       .group_by(OrgAdmin.organisation_id)).all())
         applying = dict(session.execute(select(OrganisationApplication.organisation_id, OrganisationApplication.status)
@@ -157,7 +158,7 @@ def list_orgs(out: TextIO) -> None:
 
 def list_admins(out: TextIO, organisation_id: Optional[str] = None) -> None:
     now = utcnow()
-    with session_scope() as session:
+    with platform_session() as session:
         query = select(OrgAdmin, Organisation.name).join(Organisation, Organisation.id == OrgAdmin.organisation_id)
         if organisation_id:
             query = query.where(OrgAdmin.organisation_id == organisation_id)
@@ -195,6 +196,7 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None, stdout: Tex
         cmd = commands.add_parser(name, help=help_text)
         cmd.add_argument("--email", required=True)
     commands.add_parser("list-orgs", help="list organisations")
+    commands.add_parser("sweep-drafts", help="delete company drafts not submitted in time (prints how many)")
     admins = commands.add_parser("list-admins", help="list admins")
     admins.add_argument("--org", help="only this organisation's")
     args = parser.parse_args(argv)
@@ -230,6 +232,13 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None, stdout: Tex
         return 0
     if args.command == "list-orgs":
         list_orgs(stdout)
+        return 0
+    if args.command == "sweep-drafts":
+        from app import onboarding
+
+        swept = onboarding.sweep_now(force=True)
+        print("Another sweep is running; nothing done." if swept is None else f"{swept} expired draft(s) deleted.",
+              file=stdout)
         return 0
     if args.command == "list-admins":
         list_admins(stdout, args.org)

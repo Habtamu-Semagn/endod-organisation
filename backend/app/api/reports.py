@@ -18,7 +18,7 @@ from sqlalchemy import select
 from app import audit, csvutil, money
 from app.api.common import bad, csv_response, today
 from app.auth import Principal, current_admin
-from app.db import session_scope
+from app.db import tenant_session
 from app.models import Claim, ClaimItem, ClaimStatus, Employee
 from app.policy import default_policy, normalise_medicine, policy_year
 
@@ -123,7 +123,7 @@ def build(session, org: str, start: date, end: date) -> Dict[str, Any]:
 def report(date_from: Optional[date] = Query(default=None, alias="from"),
            date_to: Optional[date] = Query(default=None, alias="to"),
            principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         start, end = _period(session, principal.organisation_id, date_from, date_to)
         return build(session, principal.organisation_id, start, end)
 
@@ -154,7 +154,7 @@ def export(kind: str = Query(max_length=16),
            principal: Principal = Depends(current_admin)):
     if kind not in KINDS:
         raise bad(f"kind must be one of {', '.join(KINDS)}.")
-    with session_scope() as session:
+    with tenant_session(principal.organisation_id) as session:
         start, end = _period(session, principal.organisation_id, date_from, date_to)
         text = _csv(kind, build(session, principal.organisation_id, start, end))
         audit.by(session, principal, audit.REPORT_EXPORTED, target_type="report", target_id=kind,

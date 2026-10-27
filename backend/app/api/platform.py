@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from app import audit, auth, onboarding
 from app.api.application import document_of, send_document
 from app.config import get_settings
-from app.db import ensure_aware, iso, session_scope, utcnow
+from app.db import ensure_aware, iso, platform_session, utcnow
 from app.errors import ApiError
 from app.models import (
     ApplicationStatus, AuditResult, Employee, OrgAdmin, Organisation, OrganisationApplication, OrgStatus,
@@ -141,10 +141,9 @@ def _locked(session, application_id: str):
 def list_applications(status: Optional[str] = Query(default=None)) -> Dict[str, List[Dict[str, Any]]]:
     if status is not None and status not in ApplicationStatus.ALL:
         raise ApiError(400, f"status must be one of {', '.join(ApplicationStatus.ALL)}.", "VALIDATION_ERROR")
-    with session_scope() as session:
-        # No worker runs here: expired drafts go when Endod looks (and on applying or signing in).
-        onboarding.sweep_expired_drafts(session)
-    with session_scope() as session:
+    # Expired drafts go when Endod looks too (at most once per ORG_SWEEP_INTERVAL_SECONDS).
+    onboarding.sweep_now()
+    with platform_session() as session:
         query = select(OrganisationApplication).order_by(
             func.coalesce(OrganisationApplication.submitted_at, OrganisationApplication.created_at).desc(),
             OrganisationApplication.organisation_id)
@@ -155,13 +154,13 @@ def list_applications(status: Optional[str] = Query(default=None)) -> Dict[str, 
 
 @router.get("/applications/{application_id}")
 def read_application(application_id: str) -> Dict[str, Any]:
-    with session_scope() as session:
+    with platform_session() as session:
         return onboarding.review_detail(session, _application(session, application_id))
 
 
 @router.get("/applications/{application_id}/documents/{kind}")
 def read_document(application_id: str, kind: str, request: Request):
-    with session_scope() as session:
+    with platform_session() as session:
         app = _application(session, application_id)
         try:
             doc = document_of(session, app.organisation_id, kind)
@@ -176,7 +175,7 @@ def read_document(application_id: str, kind: str, request: Request):
 @router.post("/applications/{application_id}/approve")
 def approve(application_id: str, body: Approval, request: Request) -> Dict[str, str]:
     try:
-        with session_scope() as session:
+        with platform_session() as session:
             org, app = _locked(session, application_id)
             # Exactly the version the reviewer saw, checked under the lock.
             if app.status != ApplicationStatus.SUBMITTED or ensure_aware(app.updated_at) != body.expected_updated_at:
@@ -216,7 +215,7 @@ def approve(application_id: str, body: Approval, request: Request) -> Dict[str, 
 @router.post("/applications/{application_id}/reject")
 def reject(application_id: str, body: Rejection, request: Request) -> Dict[str, str]:
     new_status = ApplicationStatus.CLOSED if body.close else ApplicationStatus.REJECTED
-    with session_scope() as session:
+    with platform_session() as session:
         _org, app = _locked(session, application_id)
         if app.status != ApplicationStatus.SUBMITTED:
             raise ApiError(409, f"Only a submitted application can be rejected (this one is {app.status}).",
@@ -247,7 +246,7 @@ def _approved():
 
 @router.get("/organisations")
 def list_organisations() -> Dict[str, List[Dict[str, Any]]]:
-    with session_scope() as session:
+    with platform_session() as session:
         orgs = list(session.scalars(_approved().order_by(Organisation.created_at.desc(), Organisation.id)))
         employees = dict(session.execute(select(Employee.organisation_id, func.count())
                                          .where(Employee.active.is_(True)).group_by(Employee.organisation_id)).all())
@@ -262,7 +261,7 @@ def list_organisations() -> Dict[str, List[Dict[str, Any]]]:
 def _set_status(organisation_id: str, body: Review, request: Request, new_status: str) -> Dict[str, str]:
     if not _HEX_ID.match(organisation_id or ""):
         raise _not_found("Organisation")
-    with session_scope() as session:
+    with platform_session() as session:
         if session.scalar(_approved().where(Organisation.id == organisation_id)) is None:
             raise _not_found("Organisation")
         # The organisation row is the first (and here the only) lock, as everywhere.

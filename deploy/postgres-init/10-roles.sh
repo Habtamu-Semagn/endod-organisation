@@ -9,7 +9,8 @@
 #   org_app    what the API connects as: read and write on the app tables,
 #              but only SELECT and INSERT on audit_events (no UPDATE, DELETE
 #              or TRUNCATE: the API cannot rewrite or erase the audit log),
-#              and no DDL at all.
+#              and no DDL at all. Neither role bypasses row-level security
+#              (migration 0004): org_app sees one organisation per transaction.
 # Tables created later by org_owner get the app grants by default (below);
 # migrations/env.py then sets them exactly after every upgrade.
 set -eu
@@ -19,8 +20,8 @@ set -eu
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
      -v owner_pw="$ORG_OWNER_PASSWORD" -v app_pw="$ORG_APP_PASSWORD" -v db="$POSTGRES_DB" <<'EOSQL'
-CREATE ROLE org_owner LOGIN PASSWORD :'owner_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE;
-CREATE ROLE org_app LOGIN PASSWORD :'app_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+CREATE ROLE org_owner LOGIN PASSWORD :'owner_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+CREATE ROLE org_app LOGIN PASSWORD :'app_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
 
 ALTER DATABASE :"db" OWNER TO org_owner;
 REVOKE ALL ON DATABASE :"db" FROM PUBLIC;

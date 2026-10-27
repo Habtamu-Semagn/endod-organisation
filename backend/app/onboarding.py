@@ -27,9 +27,11 @@ sees ``duplicate_tin`` on each of them (Amendment 1 of the contract).
 
 Nobody verifies the applicant's email yet (``email_verified`` is always false
 for Endod), so drafts not submitted within DRAFT_DAYS are deleted with
-everything they made (``sweep_expired_drafts``). There is no worker in this
-deployment: the sweep runs whenever an application is started, whenever
-Endod lists applications, and when the admin of an expired draft signs in.
+everything they made (``sweep_expired_drafts``): by the API's background task
+and when Endod lists applications (``sweep_now``, at most once per
+ORG_SWEEP_INTERVAL_SECONDS, one sweep at a time). Until then an expired draft's
+admin cannot sign in (app.auth), and an application with its email deletes
+that one draft first (app.api.application).
 
 Locks: every path that changes an application locks the organisation row
 first, then the application row (``lock_for_change``): the applicant's steps,
@@ -40,17 +42,19 @@ everywhere, so two of them never wait on each other in a cycle.
 from __future__ import annotations
 
 import secrets
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
-from app import audit, files
-from app.db import ensure_aware, iso, utcnow
+from app import audit, files, rls
+from app.config import get_settings
+from app.db import PLATFORM_KEY, ensure_aware, iso, platform_session, utcnow
 from app.errors import ApiError
 from app.models import (
     AdminSession, ApplicationDocument, ApplicationStatus, AuditResult, BenefitPolicy, DocumentKind, LoginThrottle,
-    OrgAdmin, Organisation, OrganisationApplication, OrgStatus, RecoveryCode, SetupToken,
+    OrgAdmin, Organisation, OrganisationApplication, RecoveryCode, SetupToken,
 )
 
 #: A draft not submitted within this many days is deleted (its email was never verified).
@@ -122,10 +126,10 @@ def missing(session, app: OrganisationApplication) -> Dict[str, List[str]]:
 
 def tin_taken(session, tin: str, organisation_id: str) -> bool:
     """``tin`` is held by another approved, active organisation (the only
-    holder of a TIN; applications never block one another)."""
-    return session.scalar(select(Organisation.id).where(
-        Organisation.tin == tin, Organisation.id != organisation_id, Organisation.status == OrgStatus.ACTIVE,
-    )) is not None
+    holder of a TIN; applications never block one another). Asked by the
+    applicant's own session, which sees no other organisation: on PostgreSQL
+    through one SECURITY DEFINER function that answers yes or no (app.rls)."""
+    return rls.tin_taken(session, tin, organisation_id)
 
 
 def duplicate_tin(session, app: OrganisationApplication) -> bool:
@@ -187,12 +191,20 @@ def delete_organisation(session, organisation_id: str) -> None:
         files.delete(organisation_id, doc_id)
 
 
-def sweep_expired_drafts(session, now: Optional[datetime] = None) -> int:
-    """Delete drafts not submitted within DRAFT_DAYS, each audited. Returns how many."""
+def sweep_expired_drafts(session, now: Optional[datetime] = None, email: Optional[str] = None) -> int:
+    """Delete drafts not submitted within DRAFT_DAYS, each audited. Returns how
+    many. Acts across organisations: ``session`` is an app.db.platform_session.
+    With ``email``: only the expired draft (if any) whose admin has that email."""
+    if not session.info.get(PLATFORM_KEY):
+        raise RuntimeError("The expired-draft sweep runs in a platform session (app.db.platform_session).")
     now = now or utcnow()
     cutoff = now - timedelta(days=DRAFT_DAYS)
-    stale = list(session.scalars(select(OrganisationApplication.organisation_id).where(
-        OrganisationApplication.status == ApplicationStatus.DRAFT, OrganisationApplication.created_at < cutoff)))
+    query = select(OrganisationApplication.organisation_id).where(
+        OrganisationApplication.status == ApplicationStatus.DRAFT, OrganisationApplication.created_at < cutoff)
+    if email is not None:
+        query = query.where(OrganisationApplication.organisation_id.in_(
+            select(OrgAdmin.organisation_id).where(OrgAdmin.email == email)))
+    stale = list(session.scalars(query))
     swept = 0
     for organisation_id in stale:
         # Same lock order as every other path; checked again under the lock.
@@ -207,6 +219,34 @@ def sweep_expired_drafts(session, now: Optional[datetime] = None) -> int:
                      detail={"reason": f"draft_not_submitted_within_{DRAFT_DAYS}_days", "admins": emails})
         swept += 1
     return swept
+
+
+#: Any two sweeps of the whole table, in any process, take turns on this
+#: transaction-level advisory lock; one that finds it taken skips.
+SWEEP_LOCK = 0x54656E61  # "Tena"
+_last_sweep: Optional[float] = None
+
+
+def sweep_now(force: bool = False) -> Optional[int]:
+    """The periodic sweep: at most once per ORG_SWEEP_INTERVAL_SECONDS in this
+    process (unless ``force``), and skipped when another sweep is running
+    (pg_try_advisory_xact_lock). Returns how many drafts went, or None if skipped.
+
+    Never on a sign-in or an application: those are public, so a sweep there
+    would let anyone make the database take row locks over every expired draft
+    on demand. The API runs it in the background (app.main), the platform
+    list runs it, and ``python -m app.cli sweep-drafts`` does from cron."""
+    global _last_sweep
+    interval = get_settings().ORG_SWEEP_INTERVAL_SECONDS
+    started = time.monotonic()
+    if not force and interval > 0 and _last_sweep is not None and started - _last_sweep < interval:
+        return None
+    _last_sweep = started
+    with platform_session() as session:
+        if rls.postgres(session) and not session.scalar(text("SELECT pg_try_advisory_xact_lock(:k)"),
+                                                        {"k": SWEEP_LOCK}):
+            return None
+        return sweep_expired_drafts(session)
 
 
 def document_payload(doc: ApplicationDocument) -> Dict[str, Any]:

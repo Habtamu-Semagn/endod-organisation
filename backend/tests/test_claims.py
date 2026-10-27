@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.db import session_scope
+from app.db import platform_session
 from app.models import AdminSession, Claim, ClaimItem, ClaimStatus
 
 
@@ -61,7 +61,7 @@ def test_bad_claims_are_refused(portal, change, status):
     body = {**portal.claim_body(emp["id"]), **change}
     resp = portal.post("/claims", json=body)
     assert resp.status_code == status, resp.text
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.scalar(select(Claim.id)) is None
 
 
@@ -86,7 +86,7 @@ def test_a_receipt_file_is_required_and_used_once(portal):
 def test_approval_needs_a_fresh_code_and_pays_the_share(portal):
     portal.set_policy(copay_percent=10)
     claim = portal.claim(portal.employee()["id"], items=one_item(100_000))
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(AdminSession).values(reauth_at=None))
     resp = portal.approve(claim["id"])
     assert resp.status_code == 403 and resp.json()["error_code"] == "REAUTH_REQUIRED"
@@ -172,7 +172,7 @@ def test_only_this_policy_years_claims_count(portal):
     old = portal.claim(emp["id"], items=one_item(100_000), receipt_date=date(2026, 1, 5))
     approved(portal, old["id"])
     # Moved into last year (as if approved then): it no longer counts.
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(Claim).where(Claim.id == old["id"]).values(receipt_date=date(2025, 12, 20)))
     claim = portal.claim(emp["id"], items=one_item(100_000))
     assert approved(portal, claim["id"]).json()["approved_santim"] == 100_000
@@ -240,12 +240,12 @@ def test_a_duplicate_slipped_in_is_refused_at_approval_and_by_the_database(porta
     other = portal.claim(emp["id"], receipt_number="R-2")
     approved(portal, first["id"])
     # As if two entries raced: the second has the same receipt.
-    with session_scope() as session:
+    with platform_session() as session:
         session.execute(update(Claim).where(Claim.id == other["id"]).values(receipt_number="R-1"))
     resp = approved(portal, other["id"])
     assert resp.status_code == 409 and resp.json()["error_code"] == "DUPLICATE_RECEIPT"
     with pytest.raises(IntegrityError):
-        with session_scope() as session:
+        with platform_session() as session:
             session.execute(update(Claim).where(Claim.id == other["id"]).values(status="approved", approved_santim=1))
 
 
@@ -348,7 +348,7 @@ def test_the_list_filters_and_counts(portal):
 def test_line_totals_are_checked_by_the_database(portal):
     claim = portal.claim(portal.employee()["id"])
     with pytest.raises(IntegrityError):
-        with session_scope() as session:
+        with platform_session() as session:
             session.execute(update(ClaimItem).where(ClaimItem.claim_id == claim["id"]).values(line_total_santim=1))
-    with session_scope() as session:
+    with platform_session() as session:
         assert session.scalar(select(Claim.status).where(Claim.id == claim["id"])) == ClaimStatus.PENDING
