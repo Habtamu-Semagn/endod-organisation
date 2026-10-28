@@ -1,11 +1,13 @@
 """Events sent to a company system's webhook, signed like Stripe's.
 
 * **Events:** claim.approved, claim.rejected, batch.paid, employee.changed
-  (and endpoint.test from "Send test event"), to every connection of the
-  organisation with the ``webhooks`` scope and a webhook URL. Bodies are thin:
-  ids, numbers, statuses, amounts and times; never names, phone numbers,
-  payout accounts, medicines or rejection reasons (a connection with a read
-  scope fetches the rest).
+  (and endpoint.test from "Send test event"), to every live connection of
+  the organisation with the ``webhooks`` scope and a webhook URL. A test
+  connection never receives real events, only "Send test event". Bodies are
+  thin: ids, numbers, statuses, amounts and times, and for employee.changed
+  the NAMES of the fields that changed; never a value, a name, a phone number,
+  a payout account, a medicine or a rejection reason (a connection with a
+  read scope fetches the rest).
 * **Signature:** ``Endod-Signature: t=<unix time>,v1=<hex HMAC-SHA256 of
   "<t>.<body>" under the connection's webhook secret>``.
 * **Delivery:** queued in ``webhook_deliveries`` in the transaction of the
@@ -43,7 +45,9 @@ from sqlalchemy.orm import Session
 from app import security
 from app.db import ensure_aware, iso, platform_session, utcnow
 from app.integrations import clients, scopes as S
-from app.models import Claim, DeliveryStatus, Employee, IntegrationClient, PaymentBatch, WebhookDelivery
+from app.models import (
+    Claim, DeliveryStatus, Employee, IntegrationClient, IntegrationMode, PaymentBatch, WebhookDelivery,
+)
 from app.policy import batch_code, claim_code
 
 logger = logging.getLogger("organisation.webhooks")
@@ -100,7 +104,8 @@ def _event(event_type: str, organisation_id: str, mode: str, data: Dict[str, Any
 def _receivers(session: Session, organisation_id: str) -> List[IntegrationClient]:
     rows = session.scalars(select(IntegrationClient).where(
         IntegrationClient.organisation_id == organisation_id, IntegrationClient.revoked_at.is_(None),
-        IntegrationClient.webhook_url.is_not(None)))
+        # Test connections never get real events (only "Send test event").
+        IntegrationClient.mode == IntegrationMode.LIVE, IntegrationClient.webhook_url.is_not(None)))
     return [c for c in rows if S.WEBHOOKS in S.parse(c.scopes)]
 
 
@@ -144,11 +149,12 @@ def batch_event(session: Session, batch: PaymentBatch) -> int:
     })
 
 
-def employee_event(session: Session, employee: Employee, change: str) -> int:
-    """``change``: created, updated, deactivated or activated."""
+def employee_event(session: Session, employee: Employee, change: str, fields=()) -> int:
+    """``change``: created, updated, deactivated or activated; ``fields``: the names of
+    the fields that changed (never their values)."""
     return emit(session, employee.organisation_id, EMPLOYEE_CHANGED, {
         "employee_id": employee.id, "employee_number": employee.employee_number, "active": employee.active,
-        "change": change,
+        "change": change, "fields": sorted(set(fields)),
     })
 
 
@@ -162,10 +168,17 @@ class Blocked(ValueError):
     """The destination is not allowed (not https, or not a public address)."""
 
 
+#: NAT64 prefixes (RFC 6052, RFC 8215): an address in them reaches an IPv4
+#: address, possibly a private one, through a translator.
+NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+
+
 def public_address(ip: ipaddress._BaseAddress) -> bool:
     if isinstance(ip, ipaddress.IPv6Address):
         if ip.ipv4_mapped is not None:
             return public_address(ip.ipv4_mapped)
+        if any(ip in network for network in NAT64):
+            return False
         if ip.teredo is not None or (ip.sixtofour is not None and not public_address(ip.sixtofour)):
             return False
     return bool(ip.is_global) and not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast

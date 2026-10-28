@@ -28,12 +28,15 @@ An administrator opens **Connect your system** in the TenaCare portal and clicks
    | In the portal | Scope | Gives |
    |---|---|---|
    | Sync employees from your HR system | `employees.write` | `POST /employees`, `POST /employees/{employee_number}/deactivate` |
-   | See employee list | `employees.read` | `GET /employees`, `GET /employees/{employee_number}` |
+   | Change employees' payout accounts (bank / Telebirr) | `employees.payout.write` | `payout_method` and `payout_account` in `POST /employees` (with `employees.write`); see [Payout accounts](#4-payout-accounts) |
+   | See employee list | `employees.read` | `GET /employees`, `GET /employees/{employee_number}` (payout accounts masked) |
+   | See employees' full payout accounts | `employees.payout.read` | full `payout_account` in reads (with `employees.read`) |
    | See claims and their status | `claims.read` | `GET /claims`, `GET /claims/{id}` |
    | See payments | `payments.read` | `GET /payments/batches`, `GET /payments/batches/{id}` |
    | Get notified when claims are approved or paid | `webhooks` | events sent to your webhook URL |
 
-   and **Live** (real data) or **Test** (everything is checked, nothing is stored);
+   The two payout abilities are off unless the administrator ticks them (the portal
+   warns in red), and **Live** (real data) or **Test** (sample data; nothing is stored);
 3. the **client ID** and **client secret**, shown once. Save the secret in your
    system's secret store now: Endod keeps only a hash of it and cannot show it again
    (an administrator can rotate it). "Download setup guide" prints the connection's
@@ -124,10 +127,13 @@ are those of the Employees screen in the portal:
 | `name` | 2 to 120 characters; required for a new employee |
 | `phone` | an Ethiopian mobile number (`0911223344`, `+251911223344`); required for a new employee |
 | `department` | required for a new employee |
-| `endod_id` | the Endod health card ID (`DE` and 6 digits), optional, unique in the organisation |
 | `active` | `true` or `false` (default `true` for a new employee) |
-| `payout_method`, `payout_account` | `cbe`, `awash`, `dashen` (an 8 to 20 digit account) or `telebirr` (the wallet's mobile number); send both, or both `null` to remove them |
+| `payout_method`, `payout_account` | only with `employees.payout.write`: `cbe`, `awash`, `dashen` (an 8 to 20 digit account) or `telebirr` (the wallet's mobile number); send both, or both `null` to remove them |
 | `dependants` | the employee's covered dependants: `[{"name", "relationship" (spouse, child, parent, other), "birth_date" (YYYY-MM-DD, optional)}]` |
+
+Reads also show `endod_id`, the employee's Endod health card ID. It is **never set
+through the API**: an administrator links it in the portal, and a row that sends
+`endod_id` is refused.
 
 ### Add or update employees (`employees.write`)
 
@@ -137,8 +143,7 @@ curl -s https://api.endod-health.com/organisation/v1/employees \
   -H "Idempotency-Key: payroll-sync-2026-10-28" \
   -d '{"employees": [
         {"employee_number": "ET-0042", "name": "Abebe Kebede", "phone": "0911223344",
-         "department": "Operations", "endod_id": "DE100042",
-         "payout_method": "cbe", "payout_account": "1000123456789",
+         "department": "Operations",
          "dependants": [{"name": "Liya Abebe", "relationship": "child", "birth_date": "2016-02-01"}]},
         {"employee_number": "ET-0043", "department": "Finance"}
       ]}'
@@ -149,8 +154,7 @@ curl -s https://api.endod-health.com/organisation/v1/employees \
  "summary": {"create": 1, "update": 1, "unchanged": 0, "error": 0},
  "results": [
    {"index": 0, "employee_number": "ET-0042", "action": "create", "employee_id": "5f0c...",
-    "changes": ["department", "employee_number", "endod_id", "name", "payout_account", "payout_method", "phone",
-                "dependants"], "errors": []},
+    "changes": ["department", "employee_number", "name", "phone", "dependants"], "errors": []},
    {"index": 1, "employee_number": "ET-0043", "action": "update", "employee_id": "9a1e...",
     "changes": ["department"], "errors": []}]}
 ```
@@ -163,8 +167,6 @@ curl -s https://api.endod-health.com/organisation/v1/employees \
 - **All or nothing:** every row is checked first; with any error nothing changes and
   the answer is `422` with each row's `errors` (`error_code: INVALID_EMPLOYEES`).
 - At most **500 employees** per request: send larger rosters in several requests.
-- Changes of payout details are audited like the portal's (accounts masked to their
-  last 4 digits).
 
 ### Deactivate an employee (`employees.write`)
 
@@ -188,12 +190,29 @@ curl -s "https://api.endod-health.com/organisation/v1/employees?status=active&li
 curl -s https://api.endod-health.com/organisation/v1/employees/ET-0042 -H "Authorization: Bearer $TOKEN"
 ```
 
-`status` is `active`, `inactive` or `all` (default); `updated_since` (an ISO 8601 time
+`payout_account` is masked to its last 4 digits (`****6789`) unless the connection
+has `employees.payout.read`. `status` is `active`, `inactive` or `all` (default); `updated_since` (an ISO 8601 time
 with an offset) returns only employees changed since; `limit` is at most 500. Lists
 answer `{"items": [...], "total", "limit", "offset", "has_more"}`, in employee number
 order.
 
-## 4. Claims (`claims.read`)
+## 4. Payout accounts
+
+Where reimbursements are paid is the most sensitive thing a system can change, so:
+
+- it needs its own ability, **`employees.payout.write`** ("Change employees' payout
+  accounts (bank / Telebirr)"), which an administrator grants separately, after a red
+  warning, with a fresh authenticator code; without it `payout_method` and
+  `payout_account` are refused (`422`);
+- every change is audited with the old and new accounts masked to their last 4 digits,
+  listed under the connection's Advanced section, and announced on the portal's
+  Overview ("N payout accounts changed by <connection> in the last 24 h");
+- every change is **held for 24 hours**: until then the employee's approved claims are
+  not put in a payout batch, unless an administrator confirms the change in the portal
+  first (with a fresh code). An administrator who sets the account in the portal
+  confirms it too.
+
+## 5. Claims (`claims.read`)
 
 ```bash
 curl -s "https://api.endod-health.com/organisation/v1/claims?status=approved&from=2026-10-01&to=2026-10-31" \
@@ -216,7 +235,7 @@ Filters: `status` (`pending`, `approved`, `rejected`, `paid`), `employee_number`
 `GET /claims/{id}` adds the medicines (`items`). Receipt files are never available
 through the API.
 
-## 5. Payments (`payments.read`)
+## 6. Payments (`payments.read`)
 
 ```bash
 curl -s "https://api.endod-health.com/organisation/v1/payments/batches?status=paid" -H "Authorization: Bearer $TOKEN"
@@ -229,15 +248,21 @@ A batch: `id`, `code` (`BATCH-0007`), `status` (`open`, `paid`), `method` (`cbe`
 `claims` (id, code, employee, amount). Payout account numbers are not included:
 the bank file stays in the portal. TenaCare never moves money.
 
-## 6. Test mode
+## 7. Test mode
 
-A **Test** connection (client ID `endod_test_...`) gets the same checks and the same
-answers as a live one, with `"mode": "test"` and `"stored": false`, and **stores
-nothing**: no employee is added or changed, no event is sent, no Idempotency-Key is
-kept. Reads show your real data. Use it to try your integration before switching to
-a Live connection.
+A **Test** connection (client ID `endod_test_...`) never sees or changes your real data:
 
-## 7. Webhooks (`webhooks`)
+- its **reads** answer synthetic sample data (employees `SAMPLE-0001` to `SAMPLE-0003`,
+  four sample claims, one sample batch, with `"sample": true`), in exactly the live
+  shapes;
+- its **writes** get the same checks and answers as a live one, with `"mode": "test"`,
+  `"stored": false` and no ids, and **store nothing**: no employee is added or changed,
+  no Idempotency-Key is kept;
+- it receives **no real events**, only "Send test event" from the portal.
+
+Use it to try your integration before switching to a Live connection.
+
+## 8. Webhooks (`webhooks`)
 
 Endod POSTs JSON events to your webhook URL (https only, a public address):
 
@@ -257,8 +282,15 @@ Endod POSTs JSON events to your webhook URL (https only, a public address):
           "reviewed_at": "2026-10-28T05:59:58+00:00"}}
 ```
 
-Events are thin (ids, numbers, statuses, amounts, times; never names, phone numbers,
-accounts or medicines): read the rest with the read scopes. Answer any **2xx** within
+`employee.changed` names the fields that changed, never their values:
+
+```json
+{"type": "employee.changed", "data": {"employee_id": "5f0c...", "employee_number": "ET-0042", "active": true,
+ "change": "updated", "fields": ["department", "payout_account", "payout_method"]}}
+```
+
+Events are thin (ids, numbers, statuses, amounts, times, field names; never names,
+phone numbers, accounts or medicines): read the rest with the read scopes. Answer any **2xx** within
 10 seconds. Anything else, a timeout or a redirect (never followed) is retried with
 backoff (1 min, 5 min, 15 min, 30 min, 1 h, 2 h, 4 h, then every 6 h) for up to
 **24 hours**; then the event is dropped. Events can arrive more than once and out of
@@ -326,7 +358,7 @@ static bool Verify(string secret, string header, byte[] rawBody, int tolerance =
 }
 ```
 
-## 8. Retries and `Idempotency-Key`
+## 9. Retries and `Idempotency-Key`
 
 `POST /employees` and `POST /employees/{employee_number}/deactivate` accept an
 `Idempotency-Key` header (1 to 255 printable characters, e.g. a UUID). The first
@@ -335,7 +367,7 @@ again replays it (with `Idempotent-Replayed: true`) and changes nothing; the sam
 with a different request is refused (`422`, `IDEMPOTENCY_KEY_REUSED`). Two requests
 changing the same employees at the same moment: one answers `409`; send it again.
 
-## 9. Errors
+## 10. Errors
 
 Everything but the token endpoint answers errors as JSON:
 
@@ -352,18 +384,18 @@ Everything but the token endpoint answers errors as JSON:
 | 409 | the same employees changed at the same moment (send it again) |
 | 413 | more than 500 employees, or a body over 2 MB |
 | 415 | not `application/json` |
-| 422 | rows with errors (nothing was changed), or an Idempotency-Key reused for another request |
+| 422 | rows with errors (nothing was changed: e.g. `endod_id` sent, or payout details without `employees.payout.write`), or an Idempotency-Key reused for another request |
 | 429 | too many requests: wait `Retry-After` seconds |
 | 503 | the API is not available |
 
-## 10. Limits
+## 11. Limits
 
 - A sync: at most **500 employees** and **2 MB**; a list page: at most 500 rows.
 - **60 requests per minute** per connection (token requests not counted).
 - Token requests: 20 per minute per client from one address, 30 per minute per address.
 - Access tokens live 5 minutes; client assertions at most 5 minutes.
 
-## 11. What Endod keeps
+## 12. What Endod keeps
 
 - Your organisation's data is kept apart from every other organisation's by the
   database itself (row-level security); a connection only ever reads and changes its
@@ -371,7 +403,9 @@ Everything but the token endpoint answers errors as JSON:
 - Every change, every read and every token request is audited with the connection
   (never a secret; payout accounts masked).
 - The request log keeps method, path, status, connection, time, duration and address
-  for 30 days; never a body or a query string.
+  for 30 days; never a body or a query string. The address is the one our edge saw:
+  Cloudflare's `CF-Connecting-IP` when the connection comes from Cloudflare's ranges,
+  else the TCP peer; nothing your request sends (`X-Forwarded-For` included) can set it.
 - Webhook deliveries keep status and attempts for 30 days; an event's body is deleted
   once it is delivered or given up.
 - Client secrets are kept only as an argon2 hash; webhook secrets are encrypted at rest.

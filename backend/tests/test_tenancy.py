@@ -39,7 +39,16 @@ def two_orgs(portal, other_portal):
     b.reauth()
     connection = b.post("/connections", json={"name": "B system", "scopes": ["employees.read", "webhooks"],
                                               "webhook_url": "https://hooks.example.com/b"}).json()["connection"]
-    ids = {"connection_id": connection["id"], "employee_id": emp["id"], "dependant_id": dependant["id"], "claim_id": claim["id"],
+    from app.db import platform_session as _platform, utcnow as _now
+    from app.models import IntegrationPayoutChange
+
+    with _platform() as session:
+        change = IntegrationPayoutChange(organisation_id=b.org_id, employee_id=emp["id"], client_pk=connection["id"],
+                                         after_method="cbe", after_account="****1234", hold_until=_now())
+        session.add(change)
+        session.flush()
+        change_id = change.id
+    ids = {"connection_id": connection["id"], "change_id": change_id, "employee_id": emp["id"], "dependant_id": dependant["id"], "claim_id": claim["id"],
            "pending_claim_id": pending["id"], "batch_id": batch["id"], "receipt_id": receipt,
            "claim_receipt_id": claim["receipt_file_id"]}
     a_emp = portal.employee(name="Own Employee")
@@ -63,7 +72,8 @@ def _routes_with_ids():
 
 #: Every route that takes an id, and the B id to try for each parameter.
 PARAMS = {"employee_id": "employee_id", "dependant_id": "dependant_id", "claim_id": "claim_id",
-          "batch_id": "batch_id", "receipt_id": "receipt_id", "connection_id": "connection_id"}
+          "batch_id": "batch_id", "receipt_id": "receipt_id", "connection_id": "connection_id",
+          "change_id": "change_id"}
 _JWK = {"kty": "EC", "crv": "P-256", "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
         "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}
 BODIES = {

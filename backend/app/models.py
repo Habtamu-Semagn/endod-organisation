@@ -697,6 +697,37 @@ class IntegrationIdempotency(Base):
     )
 
 
+class IntegrationPayoutChange(Base):
+    """A payout method or account set by a connected system
+    (employees.payout.write). The employee's claims are kept out of payout
+    batches until ``hold_until`` (24 hours), unless an admin confirms the change
+    in the portal first (app.payout_holds). Accounts are kept masked only (the
+    employee row holds the real one)."""
+
+    __tablename__ = "integration_payout_changes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    employee_id: Mapped[str] = mapped_column(String(32))
+    client_pk: Mapped[str] = mapped_column(String(32))
+    before_method: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    before_account: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    after_method: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    after_account: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    hold_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Plain id of the admin who confirmed it (in the portal).
+    confirmed_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    __table_args__ = (
+        Index("ix_integration_payout_changes_employee", "employee_id", "hold_until"),
+        same_org("employee_id", "employees", "fk_integration_payout_changes_employee_same_org", ondelete="CASCADE"),
+        same_org("client_pk", "integration_clients", "fk_integration_payout_changes_client_same_org",
+                 ondelete="CASCADE"),
+    )
+
+
 class WebhookDelivery(Base):
     """An event for a client's webhook, sent by the worker with retries. The
     body (sealed at rest) is deleted once delivered or given up."""

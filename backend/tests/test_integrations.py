@@ -22,11 +22,12 @@ from app.db import platform_session, utcnow
 from app.integrations import clients, jose, ratelimit, signing, tokens, webhooks
 from app.models import (
     AuditEvent, Dependant, DeliveryStatus, Employee, IntegrationAssertion, IntegrationClient, IntegrationIdempotency,
-    IntegrationRequest, Organisation, OrganisationApplication, WebhookDelivery,
+    IntegrationPayoutChange, IntegrationRequest, Organisation, OrganisationApplication, WebhookDelivery,
 )
 
 API = "/integrations/v1"
 EVERYTHING = ["employees.write", "employees.read", "claims.read", "payments.read"]
+PAYOUT = EVERYTHING + ["employees.payout.write", "employees.payout.read"]
 
 
 @pytest.fixture(autouse=True)
@@ -387,9 +388,9 @@ def test_unapproved_or_suspended_organisations_get_nothing(client, portal, chang
 # --- employees -----------------------------------------------------------------------------------------
 
 def test_employees_sync_is_idempotent_and_shows_in_the_employees_screen(client, portal):
-    conn = connected(portal)
+    conn = connected(portal, scopes=PAYOUT)
     auth = get_token(client, conn)
-    batch = [person("HR-0001", endod_id="DE100001", payout_method="cbe", payout_account="1000123456789"),
+    batch = [person("HR-0001", payout_method="cbe", payout_account="1000123456789"),
              person("HR-0002", dependants=[{"name": "Liya Worker", "relationship": "child",
                                             "birth_date": "2016-02-01"}])]
     first = sync(client, auth, batch)
@@ -405,7 +406,7 @@ def test_employees_sync_is_idempotent_and_shows_in_the_employees_screen(client, 
     listed = portal.get("/employees").json()
     names = {e["employee_number"]: e for e in listed["items"]}
     assert set(names) == {"HR-0001", "HR-0002"}
-    assert names["HR-0001"]["endod_id"] == "DE100001" and names["HR-0001"]["phone"] == "+251911223344"
+    assert names["HR-0001"]["payout_account"] == "1000123456789" and names["HR-0001"]["phone"] == "+251911223344"
     assert [d["name"] for d in names["HR-0002"]["dependants"]] == ["Liya Worker"]
     # Read back through the API.
     read = client.get(f"{API}/employees", headers=auth).json()
@@ -416,7 +417,7 @@ def test_employees_sync_is_idempotent_and_shows_in_the_employees_screen(client, 
 
 
 def test_partial_updates_payout_audit_masked_and_deactivation(client, portal):
-    conn = connected(portal)
+    conn = connected(portal, scopes=PAYOUT)
     auth = get_token(client, conn)
     assert sync(client, auth, [person("HR-7", payout_method="cbe", payout_account="1000555512345678")]).status_code \
         == 200
@@ -467,14 +468,14 @@ def test_a_sync_with_any_error_changes_nothing(client, portal):
     assert body["error_code"] == "INVALID_EMPLOYEES" and body["stored"] is False
     errors = {r["index"]: r["errors"] for r in body["results"]}
     assert errors[0] == [] and "Phone must be" in errors[1][0] and "also at index 0" in errors[2][0]
-    assert "needs name, phone, department" in errors[3][0] and "Endod ID" in errors[4][0]
-    assert "Payout method" in errors[5][0] and errors[6] and "Unknown field" in errors[7][0]
+    assert "needs name, phone, department" in errors[3][0] and "endod_id cannot be set" in errors[4][0]
+    assert "employees.payout.write" in errors[5][0] and errors[6] and "Unknown field" in errors[7][0]
     assert count(Employee) == 0
     assert not events("employee_created")
-    # Endod IDs stay unique across the organisation.
-    portal.employee(employee_number="P-1", endod_id="DE200002")
-    resp = sync(client, auth, [person("HR-9", endod_id="DE200002")])
-    assert resp.status_code == 422 and "belongs to employee P-1" in resp.json()["results"][0]["errors"][0]
+    # With the payout scope, the payout rules of the portal apply.
+    payouts = get_token(client, connected(portal, scopes=PAYOUT, name="Payroll"))
+    resp = sync(client, payouts, [person("HR-5", payout_method="paypal", payout_account="1")])
+    assert resp.status_code == 422 and "Payout method" in resp.json()["results"][0]["errors"][0]
 
 
 def test_limits_on_a_sync(client, portal):
@@ -537,6 +538,7 @@ def test_test_mode_answers_what_would_happen_and_stores_nothing(client, portal):
     body = resp.json()
     assert body["mode"] == "test" and body["stored"] is False
     assert [r["action"] for r in body["results"]] == ["create", "update"]
+    assert all(r["employee_id"] is None for r in body["results"])
     deactivate = client.post(f"{API}/employees/P-1/deactivate", headers=auth)
     assert deactivate.json() == {**deactivate.json(), "mode": "test", "stored": False, "action": "deactivate"}
     assert (count(Employee), count(Dependant), count(WebhookDelivery)) == before
@@ -628,7 +630,7 @@ def test_webhook_signature_like_stripe():
 
 @pytest.mark.parametrize("address", ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254",
                                      "100.64.0.1", "0.0.0.0", "::1", "fe80::1", "fc00::1", "::ffff:10.0.0.1",
-                                     "224.0.0.1"])
+                                     "224.0.0.1", "64:ff9b::a00:1", "64:ff9b::808:808", "64:ff9b:1::a00:1"])
 def test_ssrf_private_loopback_and_link_local_are_blocked_at_send_time(monkeypatch, address):
     monkeypatch.setattr(webhooks.socket, "getaddrinfo", lambda *a, **k: [(None, None, None, None, (address, 443))])
     sent = webhooks.post("https://hooks.example.com/endod", {}, b"{}")
@@ -669,7 +671,11 @@ def test_the_worker_delivers_signed_events_and_retries_with_backoff(portal, monk
     assert webhooks.verify(conn["webhook_secret"], headers["Endod-Signature"], body)
     event = json.loads(body)
     assert event["type"] == "employee.changed" and event["data"]["change"] == "created"
-    assert "phone" not in event["data"] and "payout_account" not in json.dumps(event)
+    # The names of the fields, never their values.
+    assert set(event["data"]["fields"]) == {"department", "employee_number", "name", "payout_account",
+                                            "payout_method", "phone"}
+    assert "+2519" not in body.decode() and "Engineering" not in body.decode()
+    assert "phone" not in event["data"] and "payout_account" not in event["data"]
     with platform_session() as session:
         delivery = session.scalar(select(WebhookDelivery))
         assert delivery.status == DeliveryStatus.DELIVERED and delivery.body is None
@@ -835,3 +841,146 @@ def test_without_a_signing_key_outside_development_the_api_is_off(client, portal
     resp = token_request(client, headers={**creds, "X-Endod-Edge-Key": edge})
     assert resp.status_code == 200
     assert signing.signing_key().kid == jose.thumbprint(jose.ec_public_jwk(private.public_key()))
+
+
+# --- review fixes: payout accounts, Endod IDs, test connections, NAT64, audit URLs --------------------
+
+def _held_claim(client, portal):
+    """An approved claim of a portal employee whose payout a connected system then changes."""
+    employee, claim = _approved_claim(portal)
+    conn = connected(portal, scopes=PAYOUT, name="Payroll system")
+    auth = get_token(client, conn)
+    resp = sync(client, auth, [{"employee_number": employee["employee_number"], "payout_method": "telebirr",
+                                "payout_account": "0911556677"}])
+    assert resp.status_code == 200, resp.text
+    return employee, claim, conn
+
+
+def test_payout_details_need_their_own_scope(client, portal):
+    portal.employee(employee_number="P-1")
+    auth = get_token(client, connected(portal, scopes=["employees.write"]))
+    resp = sync(client, auth, [{"employee_number": "P-1", "payout_method": "telebirr",
+                                "payout_account": "0911556677"}])
+    assert resp.status_code == 422 and "employees.payout.write" in resp.json()["results"][0]["errors"][0]
+    portal.reauth()
+    resp = portal.post("/connections", json={"name": "Alone", "scopes": ["employees.payout.write"]})
+    assert resp.status_code == 400 and "needs" in resp.json()["error"]
+    resp = portal.post("/connections", json={"name": "Alone", "scopes": ["employees.payout.read"]})
+    assert resp.status_code == 400
+    assert count(IntegrationPayoutChange) == 0
+
+
+def test_endod_ids_are_never_set_through_the_api(client, portal):
+    portal.employee(employee_number="P-1", endod_id="DE300003")
+    auth = get_token(client, connected(portal, scopes=PAYOUT))
+    for value in ("DE300003", "DE300004", None):
+        resp = sync(client, auth, [{"employee_number": "P-1", "endod_id": value}])
+        assert resp.status_code == 422 and "endod_id cannot be set" in resp.json()["results"][0]["errors"][0]
+    with platform_session() as session:
+        assert session.scalar(select(Employee.endod_id).where(Employee.employee_number == "P-1")) == "DE300003"
+
+
+def test_a_payout_change_by_a_system_is_held_announced_and_confirmed(client, portal):
+    employee, claim, conn = _held_claim(client, portal)
+    # Held: not batchable for 24 hours.
+    payments = portal.get("/batches").json()
+    assert payments["ready"]["payout_held"]["claims"] == 1
+    assert payments["ready"]["by_method"]["telebirr"]["claims"] == 0
+    portal.reauth()
+    resp = portal.post("/batches", json={"method": "telebirr"})
+    assert resp.status_code == 409
+    # Announced on the Overview and listed under the connection, masked.
+    alerts = portal.get("/overview").json()["payout_alerts"]
+    assert alerts == [{"connection_id": conn["connection"]["id"], "connection": "Payroll system", "changed": 1,
+                       "held": 1}]
+    changes = portal.get(f"/connections/{conn['connection']['id']}/payout-changes").json()["items"]
+    assert len(changes) == 1 and changes[0]["held"] is True
+    assert changes[0]["after"] == {"method": "telebirr", "account": "****6677"}
+    assert changes[0]["employee_number"] == employee["employee_number"]
+    with platform_session() as session:
+        stored = session.scalar(select(IntegrationPayoutChange))
+        assert "0911556677" not in f"{stored.before_account}{stored.after_account}"
+    detail = json.loads(events("employee_payout_changed")[-1][4])
+    assert detail["after"]["account"] == "****6677" and detail["via"] == "api" and detail["held_until"]
+    # Confirming needs a fresh code; then the claim can be paid.
+    portal.forget_reauth()
+    path = f"/connections/{conn['connection']['id']}/payout-changes/{changes[0]['id']}/confirm"
+    resp = portal.post(path)
+    assert resp.status_code == 403 and resp.json()["error_code"] == "REAUTH_REQUIRED"
+    resp = advanced(portal, path)
+    assert resp.status_code == 200 and resp.json()["held"] is False
+    assert events("integration_payout_confirmed")
+    assert portal.get("/batches").json()["ready"]["payout_held"]["claims"] == 0
+    batch = portal.post("/batches", json={"method": "telebirr"})
+    assert batch.status_code == 201, batch.text
+
+
+def test_a_held_change_ends_after_24_hours_or_when_an_admin_sets_the_account(client, portal):
+    employee, _claim, _conn = _held_claim(client, portal)
+    with platform_session() as session:
+        session.scalar(select(IntegrationPayoutChange)).hold_until = utcnow() - timedelta(minutes=1)
+    assert portal.get("/batches").json()["ready"]["payout_held"]["claims"] == 0
+    # Another held change, then the admin sets the account in the portal (with a fresh code).
+    auth = get_token(client, connected(portal, scopes=PAYOUT, name="Second"))
+    sync(client, auth, [{"employee_number": employee["employee_number"], "payout_method": "cbe",
+                         "payout_account": "1000999988887777"}])
+    assert portal.get("/batches").json()["ready"]["payout_held"]["claims"] == 1
+    portal.reauth()
+    resp = portal.patch(f"/employees/{employee['id']}", json={"payout_method": "cbe",
+                                                              "payout_account": "1000111122223333"})
+    assert resp.status_code == 200, resp.text
+    assert portal.get("/batches").json()["ready"]["payout_held"]["claims"] == 0
+
+
+def test_reads_mask_payout_accounts_without_the_payout_read_scope(client, portal):
+    portal.employee(employee_number="P-1", payout_method="cbe", payout_account="1000123456789")
+    masked = get_token(client, connected(portal, scopes=["employees.read"]))
+    assert client.get(f"{API}/employees/P-1", headers=masked).json()["payout_account"] == "****6789"
+    assert "1000123456789" not in client.get(f"{API}/employees", headers=masked).text
+    full = get_token(client, connected(portal, scopes=["employees.read", "employees.payout.read"], name="Full"))
+    assert client.get(f"{API}/employees/P-1", headers=full).json()["payout_account"] == "1000123456789"
+
+
+def test_test_connections_read_samples_and_get_no_real_events(client, portal, monkeypatch):
+    employee, claim = _approved_claim(portal)
+    conn = connected(portal, mode="test", scopes=EVERYTHING + ["webhooks"], webhook_url="https://hooks.example.com/t")
+    auth = get_token(client, conn)
+    employees = client.get(f"{API}/employees", headers=auth).json()
+    assert employees["sample"] is True and {e["employee_number"] for e in employees["items"]} == {
+        "SAMPLE-0001", "SAMPLE-0002", "SAMPLE-0003"}
+    assert employee["name"] not in client.get(f"{API}/employees", headers=auth).text
+    assert client.get(f"{API}/employees/{employee['employee_number']}", headers=auth).status_code == 404
+    claims = client.get(f"{API}/claims", headers=auth).json()
+    assert claims["total"] == 4 and all(c["pharmacy_name"] == "Sample Pharmacy" for c in claims["items"])
+    assert client.get(f"{API}/claims/{claim['id']}", headers=auth).status_code == 404
+    sample_claim = claims["items"][0]["id"]
+    assert client.get(f"{API}/claims/{sample_claim}", headers=auth).json()["items"]
+    batches = client.get(f"{API}/payments/batches", headers=auth).json()
+    assert client.get(f"{API}/payments/batches/{batches['items'][0]['id']}", headers=auth).json()["claims"]
+    # Real events never reach a test connection; "Send test event" does.
+    portal.employee()
+    with platform_session() as session:
+        assert session.scalar(select(func.count()).select_from(WebhookDelivery)) == 0
+    assert portal.post(f"/connections/{conn['connection']['id']}/webhook/test").status_code == 202
+    with platform_session() as session:
+        assert [d.event_type for d in session.scalars(select(WebhookDelivery))] == ["endpoint.test"]
+
+
+def test_nat64_webhook_addresses_are_refused():
+    for url in ("https://[64:ff9b::a00:1]/x", "https://[64:ff9b:1::1]/x"):
+        with pytest.raises(clients.WebhookUrlError):
+            clients.check_webhook_url(url)
+
+
+def test_the_audit_keeps_webhook_urls_without_query_or_user_info(portal):
+    conn = connected(portal, scopes=["webhooks"], webhook_url="https://hooks.example.com/endod?token=s3cr3t")
+    assert advanced(portal, f"/connections/{conn['connection']['id']}/webhook",
+                    {"url": "https://hooks.example.com:8443/new/path?key=abc#x"}).status_code == 400  # fragment
+    assert advanced(portal, f"/connections/{conn['connection']['id']}/webhook",
+                    {"url": "https://hooks.example.com:8443/new/path?key=abc"}).status_code == 200
+    details = [json.loads(d) for a, _r, _e, _t, d in events() if a in ("integration_connected",
+                                                                      "integration_webhook_set")]
+    assert details[0]["webhook"] == "https://hooks.example.com/endod"
+    assert details[1]["url"] == "https://hooks.example.com:8443/new/path"
+    assert "s3cr3t" not in json.dumps(details) and "abc" not in json.dumps(details)
+    assert clients.audit_url("https://user:pw@hooks.example.com/a?b=c") == "https://hooks.example.com/a"

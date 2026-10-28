@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from app import audit, csvutil, money, validation
+from app import audit, csvutil, money, payout_holds, validation
 from app.api.common import ADDIS_ABABA, batch_payload, checked, claim_payload, csv_response, today
 from app.auth import Principal, current_admin, fresh_admin
 from app.db import tenant_session, utcnow
@@ -71,11 +71,16 @@ def list_batches(status: Optional[str] = Query(default=None, max_length=16),
             query = query.where(PaymentBatch.status == status)
         batches = session.scalars(query.order_by(PaymentBatch.number.desc()).limit(200)).all()
         ready = _ready(session, org)
+        held_ids = payout_holds.held_employee_ids(session, org)
         by_method: Dict[str, Dict[str, int]] = {m: {"claims": 0, "total_santim": 0} for m in PayoutMethod.ALL}
         missing = {"claims": 0, "total_santim": 0}
+        held = {"claims": 0, "total_santim": 0}
         for claim, employee in ready:
             bucket = by_method.get(employee.payout_method) if employee.payout_account else None
             bucket = bucket if bucket is not None else missing
+            if employee.id in held_ids:
+                # A connected system changed where this employee is paid: held (app.payout_holds).
+                bucket = held
             bucket["claims"] += 1
             bucket["total_santim"] += claim.approved_santim or 0
         month_start = datetime.combine(today().replace(day=1), time(), tzinfo=ADDIS_ABABA).astimezone(timezone.utc)
@@ -88,8 +93,9 @@ def list_batches(status: Optional[str] = Query(default=None, max_length=16),
             "items": [batch_payload(b) for b in batches],
             "ready": {
                 "claims": [{**claim_payload(c, e), "payout_account": e.payout_account,
-                            "payout_ready": bool(e.payout_method and e.payout_account)} for c, e in ready],
-                "by_method": by_method, "missing_payout_details": missing,
+                            "payout_ready": bool(e.payout_method and e.payout_account) and e.id not in held_ids,
+                            "payout_held": e.id in held_ids} for c, e in ready],
+                "by_method": by_method, "missing_payout_details": missing, "payout_held": held,
                 "total_santim": sum(c.approved_santim or 0 for c, _ in ready),
             },
             "enabled_methods": _enabled_methods(session, org),
@@ -106,7 +112,8 @@ def create_batch(body: BatchIn, principal: Principal = Depends(fresh_admin)) -> 
         if method not in _enabled_methods(session, org):
             raise ApiError(400, "That payout method is not enabled for your organisation.", "VALIDATION_ERROR")
         organisation = session.scalar(select(Organisation).where(Organisation.id == org).with_for_update())
-        ready = [(c, e) for c, e in _ready(session, org)]
+        held_ids = payout_holds.held_employee_ids(session, org)
+        ready = [(c, e) for c, e in _ready(session, org) if e.id not in held_ids]
         eligible = {c.id: (c, e) for c, e in ready if e.payout_method == method and e.payout_account}
         if body.claim_ids is not None:
             wanted = list(dict.fromkeys(body.claim_ids))

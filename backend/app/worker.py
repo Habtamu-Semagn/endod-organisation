@@ -10,7 +10,9 @@ ten minutes it deletes what is kept only for a while:
 * Idempotency-Key answers after 24 hours.
 
 It connects as the app role, like the API, and works across organisations in
-the platform scope (app.db.platform_session).
+the platform scope (app.db.platform_session). It needs only its database URL
+and SESSION_SECRET (to open the sealed webhook secrets and event bodies):
+never the key that signs access tokens.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from sqlalchemy import delete
 
 from app.config import get_settings
 from app.db import check_connection_role, platform_session, utcnow
-from app.integrations import signing, webhooks
+from app.integrations import webhooks
 from app.models import (
     DeliveryStatus, IntegrationAssertion, IntegrationIdempotency, IntegrationRequest, WebhookDelivery,
 )
@@ -73,7 +75,6 @@ def _stop(_signum, _frame) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     check_connection_role()
-    signing.check_at_start()
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     logger.info("worker_started")

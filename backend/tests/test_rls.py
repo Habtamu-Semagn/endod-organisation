@@ -46,6 +46,7 @@ OWNED_BY = {
     "integration_requests": "organisation_id = :organisation",
     "integration_idempotency": "organisation_id = :organisation",
     "webhook_deliveries": "organisation_id = :organisation",
+    "integration_payout_changes": "organisation_id = :organisation",
 }
 #: Tables without row-level security, and why: per-address sign-in counters
 #: (no organisation's data, needed before any organisation is known).
@@ -66,9 +67,9 @@ def _seed(name):
     from app.db import platform_session, utcnow
     from app.models import (
         AdminSession, ApplicationDocument, AuditResult, BenefitPolicy, Claim, ClaimItem, Dependant, Employee,
-        IntegrationAssertion, IntegrationClient, IntegrationIdempotency, IntegrationRequest, LoginThrottle,
-        Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode, SetupToken,
-        WebhookDelivery,
+        IntegrationAssertion, IntegrationClient, IntegrationIdempotency, IntegrationPayoutChange, IntegrationRequest,
+        LoginThrottle, Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode,
+        SetupToken, WebhookDelivery,
     )
 
     now = utcnow()
@@ -115,6 +116,8 @@ def _seed(name):
                                    status_code=200, response="{}"),
             WebhookDelivery(organisation_id=org.id, client_pk=client.id, event_id="evt_1", event_type="x",
                             status="pending", attempts=0),
+            IntegrationPayoutChange(organisation_id=org.id, employee_id=employee.id, client_pk=client.id,
+                                    after_method="cbe", after_account="****1234", hold_until=now),
         ])
         audit.record(s, audit.ORG_CREATED, AuditResult.SUCCESS, organisation_id=org.id)
         return {"organisation": org.id, "admin": admin.id, "employee": employee.id, "claim": claim.id,
@@ -126,9 +129,9 @@ def _foreign_row(table, b):
     from app.db import utcnow
     from app.models import (
         AdminSession, ApplicationDocument, AuditEvent, BenefitPolicy, Claim, ClaimItem, Dependant, Employee,
-        IntegrationAssertion, IntegrationClient, IntegrationIdempotency, IntegrationRequest, LoginThrottle,
-        Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode, SetupToken,
-        WebhookDelivery,
+        IntegrationAssertion, IntegrationClient, IntegrationIdempotency, IntegrationPayoutChange, IntegrationRequest,
+        LoginThrottle, Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode,
+        SetupToken, WebhookDelivery,
     )
 
     org, later = b["organisation"], utcnow() + timedelta(hours=1)
@@ -172,6 +175,8 @@ def _foreign_row(table, b):
                                                                   response="{}"),
         "webhook_deliveries": lambda: WebhookDelivery(organisation_id=org, client_pk=b["client"], event_id="evt_2",
                                                       event_type="x", status="pending", attempts=0),
+        "integration_payout_changes": lambda: IntegrationPayoutChange(
+            organisation_id=org, employee_id=b["employee"], client_pk=b["client"], hold_until=later),
     }[table]()
 
 

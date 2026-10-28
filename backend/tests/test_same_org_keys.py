@@ -122,11 +122,13 @@ def test_deleting_an_employee_still_takes_their_dependants_and_override(orgs):
 
 
 @pytest.mark.parametrize("table", ["integration_assertions", "integration_requests", "integration_idempotency",
-                                   "webhook_deliveries"])
+                                   "webhook_deliveries", "integration_payout_changes"])
 def test_integration_rows_point_only_at_their_own_organisations_client(orgs, table):
     """Migration 0006: (organisation_id, client_pk) -> integration_clients (organisation_id, id)."""
     from app.db import platform_session, utcnow
-    from app.models import IntegrationAssertion, IntegrationIdempotency, IntegrationRequest, WebhookDelivery
+    from app.models import (
+        IntegrationAssertion, IntegrationIdempotency, IntegrationPayoutChange, IntegrationRequest, WebhookDelivery,
+    )
 
     a, b = orgs
 
@@ -142,6 +144,8 @@ def test_integration_rows_point_only_at_their_own_organisations_client(orgs, tab
                                                                       status_code=200, response="{}"),
             "webhook_deliveries": lambda: WebhookDelivery(organisation_id=org, client_pk=client_pk, event_id="evt_9",
                                                           event_type="x", status="pending", attempts=0),
+            "integration_payout_changes": lambda: IntegrationPayoutChange(
+                organisation_id=org, employee_id=a["employee"], client_pk=client_pk, hold_until=utcnow()),
         }[table]()
 
     with pytest.raises(IntegrityError):
@@ -150,3 +154,15 @@ def test_integration_rows_point_only_at_their_own_organisations_client(orgs, tab
             session.flush()
     with platform_session() as session:
         session.add(row(a["client"]))
+
+
+def test_a_payout_change_points_only_at_its_own_organisations_employee(orgs):
+    from app.db import platform_session, utcnow
+    from app.models import IntegrationPayoutChange
+
+    a, b = orgs
+    with pytest.raises(IntegrityError):
+        with platform_session() as session:
+            session.add(IntegrationPayoutChange(organisation_id=a["organisation"], employee_id=b["employee"],
+                                                client_pk=a["client"], hold_until=utcnow()))
+            session.flush()

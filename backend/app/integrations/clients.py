@@ -106,6 +106,22 @@ def address_allowed(address: str, cidrs: List[str]) -> bool:
     return False
 
 
+def audit_url(url: Optional[str]) -> Optional[str]:
+    """A webhook URL for the audit log: scheme, host, port and path only (never a
+    query string or user info, which may carry a token)."""
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{parts.scheme}://{host}{f':{port}' if port else ''}{parts.path or '/'}"[:300]
+
+
 class WebhookUrlError(ValueError):
     pass
 

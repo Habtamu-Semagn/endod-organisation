@@ -20,12 +20,12 @@ from sqlalchemy import func, select, update
 
 from app import audit
 from app.auth import Principal, current_admin, fresh_admin
-from app.db import iso, tenant_session, utcnow
+from app.db import ensure_aware, iso, tenant_session, utcnow
 from app.errors import ApiError
 from app.integrations import clients, jose, scopes as S, tokens, webhooks
 from app.models import (
-    DeliveryStatus, IntegrationAuth, IntegrationClient, IntegrationMode, IntegrationRequest, OrgAdmin,
-    WebhookDelivery,
+    DeliveryStatus, Employee, IntegrationAuth, IntegrationClient, IntegrationMode, IntegrationPayoutChange,
+    IntegrationRequest, OrgAdmin, WebhookDelivery,
 )
 from app.tenancy import owned
 
@@ -138,6 +138,9 @@ def connect(body: NewConnection, principal: Principal = Depends(fresh_admin)) ->
     if body.mode not in IntegrationMode.ALL:
         raise bad("Choose Live or Test.")
     granted = S.ordered(body.scopes)
+    for scope, needs in S.REQUIRES.items():
+        if scope in granted and needs not in granted:
+            raise bad(f"\"{S.SCOPES[scope][0]}\" needs \"{S.SCOPES[needs][0]}\" too.")
     webhook_url = None
     if S.WEBHOOKS in granted:
         webhook_url = _webhook_url(body.webhook_url)
@@ -161,7 +164,7 @@ def connect(body: NewConnection, principal: Principal = Depends(fresh_admin)) ->
         session.add(client)
         session.flush()
         _record(session, principal, audit.INTEGRATION_CONNECTED, client, scopes=granted, mode=client.mode,
-                webhook=webhook_url)
+                webhook=clients.audit_url(webhook_url))
         return {"connection": _payload(session, client), "client_secret": secret, "webhook_secret": webhook_secret,
                 **_about()}
 
@@ -263,7 +266,7 @@ def set_webhook(connection_id: str, body: Webhook, principal: Principal = Depend
             raise bad("A connection must be able to do something.")
         client.webhook_url, client.scopes = url, " ".join(granted)
         _record(session, principal, audit.INTEGRATION_WEBHOOK_SET if url else audit.INTEGRATION_WEBHOOK_REMOVED,
-                client, url=url)
+                client, url=clients.audit_url(url))
         return {"connection": _payload(session, client), "webhook_secret": secret}
 
 
@@ -316,3 +319,54 @@ def recent_deliveries(connection_id: str, principal: Principal = Depends(current
                            "last_error": d.last_error, "created_at": iso(d.created_at),
                            "last_attempt_at": iso(d.last_attempt_at), "next_attempt_at": iso(d.next_attempt_at),
                            "delivered_at": iso(d.delivered_at)} for d in rows]}
+
+
+# --- payout changes made by a connected system (app.payout_holds) ----------------------------------
+
+def _change_payload(change: IntegrationPayoutChange, employee: Optional[Employee], now) -> Dict[str, Any]:
+    held = change.confirmed_at is None and ensure_aware(change.hold_until) > now
+    return {"id": change.id, "employee_id": change.employee_id,
+            "employee_name": employee.name if employee else None,
+            "employee_number": employee.employee_number if employee else None,
+            "before": {"method": change.before_method, "account": change.before_account},
+            "after": {"method": change.after_method, "account": change.after_account},
+            "created_at": iso(change.created_at), "hold_until": iso(change.hold_until),
+            "confirmed_at": iso(change.confirmed_at), "held": held}
+
+
+@router.get("/{connection_id}/payout-changes")
+def payout_changes(connection_id: str, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
+    """Payout accounts this connection changed (masked), newest first; held ones can be confirmed."""
+    now = utcnow()
+    with tenant_session(principal.organisation_id) as session:
+        client = _client(session, principal, connection_id, lock=False)
+        rows = session.execute(
+            select(IntegrationPayoutChange, Employee).outerjoin(
+                Employee, (Employee.id == IntegrationPayoutChange.employee_id)
+                & (Employee.organisation_id == IntegrationPayoutChange.organisation_id))
+            .where(IntegrationPayoutChange.organisation_id == principal.organisation_id,
+                   IntegrationPayoutChange.client_pk == client.id)
+            .order_by(IntegrationPayoutChange.created_at.desc()).limit(RECENT)).all()
+        return {"items": [_change_payload(change, employee, now) for change, employee in rows]}
+
+
+@router.post("/{connection_id}/payout-changes/{change_id}/confirm")
+def confirm_payout_change(connection_id: str, change_id: str, principal: Principal = Depends(fresh_admin)) \
+        -> Dict[str, Any]:
+    """The admin checked the new payout details: the employee's claims can be batched again now."""
+    now = utcnow()
+    with tenant_session(principal.organisation_id) as session:
+        client = _client(session, principal, connection_id, lock=False)
+        change = owned(session, IntegrationPayoutChange, change_id, principal.organisation_id, lock=True)
+        if change.client_pk != client.id:
+            raise ApiError(404, "Not found.", "NOT_FOUND")
+        if change.confirmed_at is None and ensure_aware(change.hold_until) > now:
+            change.confirmed_at, change.confirmed_by = now, principal.admin_id
+            employee = session.scalar(select(Employee).where(Employee.id == change.employee_id,
+                                                             Employee.organisation_id == principal.organisation_id))
+            _record(session, principal, audit.INTEGRATION_PAYOUT_CONFIRMED, client, change_id=change.id,
+                    employee_id=change.employee_id, employee=employee.name if employee else None,
+                    after={"method": change.after_method, "account": change.after_account})
+        employee = session.scalar(select(Employee).where(Employee.id == change.employee_id,
+                                                         Employee.organisation_id == principal.organisation_id))
+        return _change_payload(change, employee, now)

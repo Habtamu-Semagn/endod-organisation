@@ -8,11 +8,21 @@ deactivate), claims and payout batches. JSON, not FHIR: this is HR data.
   errors). Sending the same employees again changes nothing ("unchanged"):
   the sync is idempotent by content, and an Idempotency-Key replays the first
   answer as well. A field left out of a row is left as it is; ``dependants``,
-  when given, is the employee's whole list of covered dependants. Payout
-  changes are audited with the accounts masked, exactly like the portal's.
-* **Test mode** (a test connection) runs every check and answers what would
-  happen (``"mode": "test"``), and stores nothing: no employee, no audit
-  event, no Idempotency-Key, no webhook.
+  when given, is the employee's whole list of covered dependants.
+* **Payout details** (where reimbursements go) need their own scope,
+  ``employees.payout.write``; without it ``payout_method`` and
+  ``payout_account`` are refused. Every change is audited with the accounts
+  masked (like the portal's), announced in the portal, and **held**: the
+  employee's claims stay out of payout batches for 24 hours unless an admin
+  confirms the change (app.payout_holds). Reads mask accounts to the last 4
+  digits unless the connection has ``employees.payout.read``.
+* **Endod IDs** (the link to the employee's Endod health card) are never set
+  through the API: an admin links them in the portal. A row with
+  ``endod_id`` is refused.
+* **Test mode** (a test connection) runs every check of a write and answers
+  what would happen (``"mode": "test"``, no ids), and stores nothing: no
+  employee, no audit event, no Idempotency-Key, no webhook. Its reads answer
+  synthetic sample data (app.integrations.samples), never the organisation's.
 * **Claims and batches** are read only; receipt files never leave (v1).
 
 Every function runs in a session acting for the caller's organisation (row-level
@@ -31,16 +41,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app import audit, validation
+from app import audit, payout_holds, validation
 from app.api.common import today
-from app.api.employees import IMPORT_COLUMNS, PAYOUT_FIELDS, clean_employee, payout_changes, payout_detail
+from app.api.employees import IMPORT_COLUMNS, PAYOUT_FIELDS, clean_employee, mask, payout_changes, payout_detail
 from app.db import iso, tenant_session, utcnow
 from app.errors import ApiError
-from app.integrations import webhooks
+from app.integrations import samples, scopes as S, webhooks
 from app.integrations.tokens import Caller, record
 from app.models import (
-    BatchStatus, Claim, ClaimItem, ClaimStatus, Dependant, Employee, IntegrationIdempotency, PaymentBatch,
-    PayoutMethod, Relationship,
+    BatchStatus, Claim, ClaimItem, ClaimStatus, Dependant, Employee, IntegrationIdempotency, IntegrationPayoutChange,
+    PaymentBatch, PayoutMethod, Relationship,
 )
 from app.policy import batch_code, claim_code
 
@@ -52,8 +62,12 @@ MAX_DEPENDANTS = 20
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_PAGE = 500
 MAX_IDEMPOTENCY_KEY = 255
-#: The fields of an employee a sync may send.
-SYNC_FIELDS = (*IMPORT_COLUMNS, "active", "dependants")
+#: The fields of an employee a sync may send...
+SYNC_FIELDS = ("employee_number", "name", "phone", "department", "active", "dependants")
+#: ... and with employees.payout.write.
+PAYOUT_SYNC_FIELDS = ("payout_method", "payout_account")
+NO_ENDOD_ID = "endod_id cannot be set through the API: an admin links Endod IDs in the portal."
+NO_PAYOUT = "Changing payout details needs the scope employees.payout.write."
 _HEX_ID = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -64,11 +78,13 @@ def dependant_payload(d: Dependant) -> Dict[str, Any]:
             "birth_date": d.birth_date.isoformat() if d.birth_date else None}
 
 
-def employee_payload(e: Employee, dependants: List[Dependant]) -> Dict[str, Any]:
+def employee_payload(e: Employee, dependants: List[Dependant], full_payout: bool = False) -> Dict[str, Any]:
+    """``payout_account`` masked to its last 4 digits unless the connection has employees.payout.read."""
     return {
         "id": e.id, "employee_number": e.employee_number, "name": e.name, "phone": e.phone,
         "department": e.department, "endod_id": e.endod_id, "active": e.active,
-        "payout_method": e.payout_method, "payout_account": e.payout_account,
+        "payout_method": e.payout_method,
+        "payout_account": e.payout_account if full_payout else mask(e.payout_account),
         "dependants": [dependant_payload(d) for d in dependants],
         "created_at": iso(e.created_at), "updated_at": iso(e.updated_at), "deactivated_at": iso(e.deactivated_at),
     }
@@ -100,6 +116,10 @@ def not_found(what: str = "Not found.") -> ApiError:
     return ApiError(404, what, "NOT_FOUND")
 
 
+def _raise(error: Exception):
+    raise error
+
+
 def _read(session, caller: Caller, resource: str, count: int, target_id: Optional[str] = None) -> None:
     record(session, caller, audit.INTEGRATION_DATA_READ, target_type=resource, target_id=target_id,
            detail={"resource": resource, "count": count})
@@ -119,6 +139,8 @@ def _dependants(session, organisation_id: str, employee_ids: List[str]) -> Dict[
 # --- reading -------------------------------------------------------------------------------------
 
 def list_employees(caller: Caller, status: str, updated_since, limit: int, offset: int) -> Dict[str, Any]:
+    if caller.test:
+        return samples.employees(status, limit, offset, S.EMPLOYEES_PAYOUT_READ in caller.scopes)
     org = caller.organisation_id
     filters = [Employee.organisation_id == org]
     if status != "all":
@@ -131,12 +153,16 @@ def list_employees(caller: Caller, status: str, updated_since, limit: int, offse
                                .offset(offset).limit(limit)).all()
         dependants = _dependants(session, org, [e.id for e in rows])
         _read(session, caller, "employees", len(rows))
-        return {"items": [employee_payload(e, dependants.get(e.id, [])) for e in rows], "total": total,
+        full = S.EMPLOYEES_PAYOUT_READ in caller.scopes
+        return {"items": [employee_payload(e, dependants.get(e.id, []), full) for e in rows], "total": total,
                 "limit": limit, "offset": offset, "has_more": offset + len(rows) < total}
 
 
 def get_employee(caller: Caller, employee_number: str) -> Dict[str, Any]:
     number = _number_or_404(employee_number)
+    if caller.test:
+        return samples.employee(number, S.EMPLOYEES_PAYOUT_READ in caller.scopes) or _raise(
+            not_found("No employee has this employee number."))
     org = caller.organisation_id
     with tenant_session(org) as session:
         employee = session.scalar(select(Employee).where(Employee.organisation_id == org,
@@ -144,7 +170,8 @@ def get_employee(caller: Caller, employee_number: str) -> Dict[str, Any]:
         if employee is None:
             raise not_found("No employee has this employee number.")
         _read(session, caller, "employee", 1, employee.id)
-        return employee_payload(employee, _dependants(session, org, [employee.id]).get(employee.id, []))
+        return employee_payload(employee, _dependants(session, org, [employee.id]).get(employee.id, []),
+                                S.EMPLOYEES_PAYOUT_READ in caller.scopes)
 
 
 def list_claims(caller: Caller, status: Optional[str], employee_number: Optional[str], date_from: Optional[date],
@@ -152,6 +179,8 @@ def list_claims(caller: Caller, status: Optional[str], employee_number: Optional
     org = caller.organisation_id
     if status is not None and status not in ClaimStatus.ALL:
         raise ApiError(400, f"status must be one of {', '.join(ClaimStatus.ALL)}.", "VALIDATION_ERROR")
+    if caller.test:
+        return samples.claims(status, employee_number, limit, offset)
     filters = [Claim.organisation_id == org, Employee.organisation_id == org]
     if status:
         filters.append(Claim.status == status)
@@ -175,6 +204,8 @@ def get_claim(caller: Caller, claim_id: str) -> Dict[str, Any]:
     org = caller.organisation_id
     if not _HEX_ID.match(claim_id or ""):
         raise not_found()
+    if caller.test:
+        return samples.claim(claim_id) or _raise(not_found())
     with tenant_session(org) as session:
         row = session.execute(select(Claim, Employee.employee_number).join(Employee, Employee.id == Claim.employee_id)
                               .where(Claim.id == claim_id, Claim.organisation_id == org,
@@ -193,6 +224,8 @@ def list_batches(caller: Caller, status: Optional[str], limit: int, offset: int)
     org = caller.organisation_id
     if status is not None and status not in BatchStatus.ALL:
         raise ApiError(400, f"status must be one of {', '.join(BatchStatus.ALL)}.", "VALIDATION_ERROR")
+    if caller.test:
+        return samples.batches(status, limit, offset)
     filters = [PaymentBatch.organisation_id == org] + ([PaymentBatch.status == status] if status else [])
     with tenant_session(org) as session:
         total = session.scalar(select(func.count()).select_from(PaymentBatch).where(*filters)) or 0
@@ -207,6 +240,8 @@ def get_batch(caller: Caller, batch_id: str) -> Dict[str, Any]:
     org = caller.organisation_id
     if not _HEX_ID.match(batch_id or ""):
         raise not_found()
+    if caller.test:
+        return samples.batch(batch_id) or _raise(not_found())
     with tenant_session(org) as session:
         batch = session.scalar(select(PaymentBatch).where(PaymentBatch.id == batch_id,
                                                           PaymentBatch.organisation_id == org))
@@ -293,9 +328,10 @@ class Row:
     changes: List[str] = field(default_factory=list)
     employee: Optional[Employee] = None
 
-    def result(self) -> Dict[str, Any]:
+    def result(self, test: bool = False) -> Dict[str, Any]:
+        """In test mode, never an id (nothing was stored; nothing real is shown)."""
         return {"index": self.index, "employee_number": self.employee_number, "action": self.action,
-                "employee_id": self.employee.id if self.employee is not None else None,
+                "employee_id": self.employee.id if self.employee is not None and not test else None,
                 "changes": self.changes, "errors": self.errors}
 
 
@@ -369,7 +405,7 @@ def _clean_dependants(row: Row, value: Any) -> Optional[List[Dict[str, Any]]]:
     return out
 
 
-def _plan(session, organisation_id: str, raw_rows: List[Any]) -> List[Row]:
+def _plan(session, organisation_id: str, raw_rows: List[Any], may_change_payout: bool) -> List[Row]:
     rows: List[Row] = []
     for index, raw in enumerate(raw_rows):
         if not isinstance(raw, dict):
@@ -377,11 +413,15 @@ def _plan(session, organisation_id: str, raw_rows: List[Any]) -> List[Row]:
             row.errors.append("Each employee must be a JSON object.")
             rows.append(row)
             continue
-        unknown = sorted(set(raw) - set(SYNC_FIELDS))
+        unknown = sorted(set(raw) - set(SYNC_FIELDS) - set(PAYOUT_SYNC_FIELDS) - {"endod_id"})
         number_raw = raw.get("employee_number")
         row = Row(index, number_raw.strip() if isinstance(number_raw, str) else "", raw)
         if unknown:
             row.errors.append(f"Unknown field(s): {', '.join(unknown)[:200]}.")
+        if "endod_id" in raw:
+            row.errors.append(NO_ENDOD_ID)
+        if not may_change_payout and any(k in raw for k in PAYOUT_SYNC_FIELDS):
+            row.errors.append(NO_PAYOUT)
         for name in IMPORT_COLUMNS:
             _string_or_none(row, name)
         try:
@@ -448,22 +488,6 @@ def _plan(session, organisation_id: str, raw_rows: List[Any]) -> List[Row]:
                 row.changes.append("dependants")
             row.action = "update" if row.changes else "unchanged"
 
-    # Endod IDs stay unique within the organisation, after the whole sync.
-    planned = {r.employee_number: r.fields["endod_id"] for r in rows if r.fields is not None and not r.errors}
-    owners: Dict[str, str] = {}
-    for number, endod in session.execute(select(Employee.employee_number, Employee.endod_id).where(
-            Employee.organisation_id == organisation_id, Employee.endod_id.is_not(None))):
-        if number not in planned:
-            owners[endod] = number
-    for row in rows:
-        endod = row.fields["endod_id"] if row.fields is not None and not row.errors else None
-        if not endod:
-            continue
-        owner = owners.get(endod)
-        if owner is not None and owner != row.employee_number:
-            row.errors.append(f"Endod ID {endod} belongs to employee {owner}.")
-        else:
-            owners[endod] = row.employee_number
     for row in rows:
         if row.errors:
             row.action, row.changes = "error", []
@@ -490,15 +514,16 @@ def sync_employees(caller: Caller, raw_rows: List[Any]) -> Work:
     """The work of ``POST /employees``, for run_write."""
 
     def work(session) -> Tuple[int, Dict[str, Any]]:
-        rows = _plan(session, caller.organisation_id, raw_rows)
+        rows = _plan(session, caller.organisation_id, raw_rows, S.EMPLOYEES_PAYOUT_WRITE in caller.scopes)
         summary = _summary(rows)
         mode = "test" if caller.test else "live"
         if summary["error"]:
             return 422, {"error": f"{summary['error']} employee(s) have errors; nothing was changed.",
                          "error_code": "INVALID_EMPLOYEES", "mode": mode, "stored": False, "summary": summary,
-                         "results": [r.result() for r in rows]}
+                         "results": [r.result(caller.test) for r in rows]}
         if caller.test:
-            return 200, {"mode": mode, "stored": False, "summary": summary, "results": [r.result() for r in rows]}
+            return 200, {"mode": mode, "stored": False, "summary": summary,
+                         "results": [r.result(True) for r in rows]}
         now = utcnow()
         for row in rows:
             if row.action == "create":
@@ -517,9 +542,18 @@ def _audit_employee(session, caller: Caller, action: str, employee: Employee, **
            detail={**detail, "via": "api"})
 
 
-def _audit_payout(session, caller: Caller, employee: Employee, before: Dict[str, Any], after: Dict[str, Any]) -> None:
-    """The same masked before and after as the portal (app.api.employees)."""
-    _audit_employee(session, caller, audit.EMPLOYEE_PAYOUT_CHANGED, employee, **payout_detail(before, after))
+def _hold_payout(session, caller: Caller, employee: Employee, before: Dict[str, Any], after: Dict[str, Any],
+                 now) -> None:
+    """A payout change by a connected system: audited masked (as the portal's), recorded (masked) and held
+    out of payout batches for 24 hours unless an admin confirms it (app.payout_holds)."""
+    hold_until = now + payout_holds.HOLD
+    session.add(IntegrationPayoutChange(
+        organisation_id=employee.organisation_id, employee_id=employee.id, client_pk=caller.client_pk,
+        before_method=before.get("payout_method"), before_account=mask(before.get("payout_account")),
+        after_method=after.get("payout_method"), after_account=mask(after.get("payout_account")),
+        created_at=now, hold_until=hold_until))
+    _audit_employee(session, caller, audit.EMPLOYEE_PAYOUT_CHANGED, employee, **payout_detail(before, after),
+                    held_until=hold_until.isoformat())
 
 
 def _create(session, caller: Caller, row: Row, now) -> None:
@@ -531,10 +565,10 @@ def _create(session, caller: Caller, row: Row, now) -> None:
     row.employee = employee
     _audit_employee(session, caller, audit.EMPLOYEE_CREATED, employee, employee_number=employee.employee_number)
     if payout_changes({}, row.fields):
-        _audit_payout(session, caller, employee, {}, row.fields)
+        _hold_payout(session, caller, employee, {}, row.fields, now)
     for d in row.dependants or []:
         _add_dependant(session, caller, employee, d)
-    webhooks.employee_event(session, employee, "created")
+    webhooks.employee_event(session, employee, "created", row.changes)
 
 
 def _add_dependant(session, caller: Caller, employee: Employee, wanted: Dict[str, Any]) -> None:
@@ -557,7 +591,7 @@ def _update(session, caller: Caller, row: Row, now) -> None:
     if changed:
         _audit_employee(session, caller, audit.EMPLOYEE_UPDATED, employee, fields=sorted(changed))
     if payout_changes(before, row.fields):
-        _audit_payout(session, caller, employee, before, row.fields)
+        _hold_payout(session, caller, employee, before, row.fields, now)
     change = "updated"
     if row.active is not None and row.active != employee.active:
         employee.active = row.active
@@ -578,7 +612,7 @@ def _update(session, caller: Caller, row: Row, now) -> None:
         for identity, d in wanted.items():
             if identity not in current:
                 _add_dependant(session, caller, employee, d)
-    webhooks.employee_event(session, employee, change)
+    webhooks.employee_event(session, employee, change, row.changes)
 
 
 def _number_or_404(employee_number: str) -> str:
@@ -601,13 +635,13 @@ def deactivate_employee(caller: Caller, employee_number: str) -> Work:
         mode = "test" if caller.test else "live"
         action = "deactivate" if employee.active else "unchanged"
         answer = {"mode": mode, "stored": not caller.test, "employee_number": employee.employee_number,
-                  "employee_id": employee.id, "action": action}
+                  "employee_id": None if caller.test else employee.id, "action": action}
         if caller.test or not employee.active:
             return 200, answer
         employee.active = False
         employee.deactivated_at = employee.updated_at = utcnow()
         _audit_employee(session, caller, audit.EMPLOYEE_DEACTIVATED, employee)
-        webhooks.employee_event(session, employee, "deactivated")
+        webhooks.employee_event(session, employee, "deactivated", ["active"])
         return 200, answer
 
     return work

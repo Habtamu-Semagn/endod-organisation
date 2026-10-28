@@ -11,11 +11,14 @@ touched:
   until it expires (each is used once);
 * ``integration_requests``: the request log (never a body; kept 30 days);
 * ``integration_idempotency``: answers replayed for an Idempotency-Key;
-* ``webhook_deliveries``: events waiting for, or sent to, a client's webhook.
+* ``webhook_deliveries``: events waiting for, or sent to, a client's webhook;
+* ``integration_payout_changes``: payout accounts a client changed (masked),
+  held out of payout batches for 24 hours unless an admin confirms them.
 
-Every table has ``organisation_id``. The four that belong to a client point
+Every table has ``organisation_id``. The ones that belong to a client point
 at it with a same-organisation composite key, (organisation_id, client_pk)
--> integration_clients (organisation_id, id), like migration 0005.
+-> integration_clients (organisation_id, id), like migration 0005; a payout
+change points at its employee the same way.
 
 On PostgreSQL each gets row-level security exactly like migration 0004
 (ENABLE, FORCE, ``tenant_isolation``, ``platform_access`` for
@@ -45,7 +48,7 @@ PLATFORM_ROLE = "org_platform"
 TENANT = "NULLIF(current_setting('app.organisation_id', true), '')"
 MAINTENANCE = "current_setting('app.scope', true) = 'maintenance'"
 TABLES = ("integration_clients", "integration_assertions", "integration_requests", "integration_idempotency",
-          "webhook_deliveries")
+          "webhook_deliveries", "integration_payout_changes")
 LOOKUP = "rls_integration_client_organisation(p_client_id text)"
 LOOKUP_QUERY = "SELECT organisation_id FROM integration_clients WHERE client_id = p_client_id"
 
@@ -190,6 +193,27 @@ def upgrade() -> None:
     op.create_index('ix_webhook_deliveries_due', 'webhook_deliveries', ['status', 'next_attempt_at'], unique=False)
     op.create_index('ix_webhook_deliveries_client', 'webhook_deliveries', ['client_pk', 'created_at'], unique=False)
 
+    org, org_fk = _organisation('integration_payout_changes')
+    client, client_fk = _client('integration_payout_changes', 'fk_integration_payout_changes_client_same_org')
+    op.create_table(
+        'integration_payout_changes',
+        sa.Column('id', sa.String(length=32), nullable=False), org,
+        sa.Column('employee_id', sa.String(length=32), nullable=False), client,
+        sa.Column('before_method', sa.String(length=16), nullable=True),
+        sa.Column('before_account', sa.String(length=12), nullable=True),
+        sa.Column('after_method', sa.String(length=16), nullable=True),
+        sa.Column('after_account', sa.String(length=12), nullable=True),
+        _when('created_at'), _when('hold_until'), _when('confirmed_at', True),
+        sa.Column('confirmed_by', sa.String(length=32), nullable=True),
+        org_fk, client_fk,
+        sa.ForeignKeyConstraint(['organisation_id', 'employee_id'], ['employees.organisation_id', 'employees.id'],
+                                name='fk_integration_payout_changes_employee_same_org', ondelete='CASCADE'),
+        sa.PrimaryKeyConstraint('id', name=op.f('pk_integration_payout_changes')),
+    )
+    _index('integration_payout_changes')
+    op.create_index('ix_integration_payout_changes_employee', 'integration_payout_changes',
+                    ['employee_id', 'hold_until'], unique=False)
+
     if op.get_bind().dialect.name != "postgresql":
         return
     _definer(LOOKUP, "varchar", LOOKUP_QUERY)
@@ -211,6 +235,6 @@ def downgrade() -> None:
         for table in reversed(TABLES):
             for policy in ("owner_maintenance", "platform_access", "tenant_isolation"):
                 op.execute(f'DROP POLICY IF EXISTS {policy} ON "{table}"')
-    for table in ('webhook_deliveries', 'integration_idempotency', 'integration_requests', 'integration_assertions',
+    for table in ('integration_payout_changes', 'webhook_deliveries', 'integration_idempotency', 'integration_requests', 'integration_assertions',
                   'integration_clients'):
         op.drop_table(table)  # its indexes and keys go with it
