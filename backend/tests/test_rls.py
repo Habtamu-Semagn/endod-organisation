@@ -342,7 +342,9 @@ def test_the_look_up_functions_answer_one_thing_and_leave_no_scope_behind(orgs):
         assert rls.tin_taken(session, b_tin, a["organisation"]) is True
         assert rls.tin_taken(session, b_tin, b["organisation"]) is False
         assert rls.tin_taken(session, "0000000000", a["organisation"]) is False
-        assert rls.integration_client_organisation(session, b["client_id"]) == b["organisation"]
+        # B's application is a draft: not approved, so its client is not looked up
+        # (tests/test_integrations.py checks every case of this look-up).
+        assert rls.integration_client_organisation(session, b["client_id"]) is None
         assert rls.integration_client_organisation(session, "endod_live_nobody") is None
         assert session.scalar(text("SELECT coalesce(current_setting('app.scope', true), '')")) == ""
         assert session.scalar(select(func.count()).select_from(AdminSession)) == 0
@@ -380,8 +382,11 @@ def test_the_app_role_cannot_call_anything_else_as_the_owner(db):
             "SELECT p.proname, has_function_privilege('public', p.oid, 'EXECUTE') FROM pg_proc p "
             "WHERE p.prosecdef AND p.pronamespace = 'public'::regnamespace ORDER BY 1")).all()
     assert [tuple(r) for r in rows] == [
-        ("rls_admin_organisation", False), ("rls_email_taken", False), ("rls_record_orgless_event", False),
-        ("rls_integration_client_organisation", False), ("rls_session_organisation", False),
+        ("rls_admin_organisation", False), ("rls_email_taken", False),
+        # Migration 0006: the integration API's token endpoint learns the organisation of a
+        # live client of an active, approved organisation from its public client_id.
+        ("rls_integration_client_organisation", False),
+        ("rls_record_orgless_event", False), ("rls_session_organisation", False),
         ("rls_setup_link_organisation", False), ("rls_tin_taken", False)]
 
 

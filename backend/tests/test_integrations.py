@@ -382,7 +382,8 @@ def test_unapproved_or_suspended_organisations_get_nothing(client, portal, chang
     resp = client.get(f"{API}/employees", headers=auth)
     assert resp.status_code == 403
     resp = token_request(client, headers=basic(conn["connection"]["client_id"], conn["client_secret"]))
-    assert resp.status_code == 400 and resp.json()["error"] == "unauthorized_client"
+    # The organisation look-up answers nothing for it: like an unknown client.
+    assert resp.status_code == 401 and resp.json()["error"] == "invalid_client"
 
 
 # --- employees -----------------------------------------------------------------------------------------
@@ -984,3 +985,37 @@ def test_the_audit_keeps_webhook_urls_without_query_or_user_info(portal):
     assert details[1]["url"] == "https://hooks.example.com:8443/new/path"
     assert "s3cr3t" not in json.dumps(details) and "abc" not in json.dumps(details)
     assert clients.audit_url("https://user:pw@hooks.example.com/a?b=c") == "https://hooks.example.com/a"
+
+
+def test_the_token_endpoints_organisation_look_up_answers_only_for_live_clients_of_open_organisations(portal):
+    """app.rls.integration_client_organisation (on PostgreSQL the SECURITY DEFINER
+    rls_integration_client_organisation, called with no tenant): the organisation id
+    for a live client of an active, approved organisation; nothing otherwise."""
+    from sqlalchemy import text
+
+    from app import rls
+    from app.db import session_scope
+
+    conn = connected(portal, scopes=["employees.read"])
+    client_id = conn["connection"]["client_id"]
+
+    def look_up(value=client_id):
+        with session_scope() as session:
+            found = rls.integration_client_organisation(session, value)
+            if rls.postgres(session):
+                # Nothing else becomes visible, and the caller's scope is as it was.
+                assert session.scalar(text("SELECT count(*) FROM integration_clients")) == 0
+                assert session.scalar(text("SELECT coalesce(current_setting('app.scope', true), '')")) == ""
+            return found
+
+    assert look_up() == portal.org_id
+    assert look_up("endod_live_" + "0" * 24) is None
+    assert look_up("") is None
+    for change in ({"status": "suspended"}, {"application": "submitted"}, {"application": "rejected"},
+                   {"application": "closed"}):
+        set_organisation(portal.org_id, **change)
+        assert look_up() is None, change
+        set_organisation(portal.org_id, status="active", application="approved")
+        assert look_up() == portal.org_id
+    advanced(portal, f"/connections/{conn['connection']['id']}/disconnect")
+    assert look_up() is None

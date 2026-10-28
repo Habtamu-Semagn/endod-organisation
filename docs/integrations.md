@@ -109,8 +109,7 @@ token = requests.post(TOKEN_URL, data={
 |---|---|---|
 | 400 | `unsupported_grant_type` | `grant_type` is not `client_credentials` |
 | 400 | `invalid_request` | malformed request, or two authentication methods |
-| 401 | `invalid_client` | unknown or disconnected client, wrong secret, bad assertion (signature, `aud`, `exp`, reused `jti`), or a call from an address not allowed |
-| 400 | `unauthorized_client` | the organisation is not approved by Endod, or is suspended |
+| 401 | `invalid_client` | unknown or disconnected client, an organisation not approved by Endod or suspended, wrong secret, bad assertion (signature, `aud`, `exp`, reused `jti`), or a call from an address not allowed |
 | 400 | `invalid_scope` | a scope not granted to the connection |
 | 429 | `slow_down` | too many token requests (see Limits); wait `Retry-After` seconds |
 | 503 | `temporarily_unavailable` | the API is not available |

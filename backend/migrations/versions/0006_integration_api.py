@@ -24,9 +24,13 @@ On PostgreSQL each gets row-level security exactly like migration 0004
 (ENABLE, FORCE, ``tenant_isolation``, ``platform_access`` for
 ``org_platform``, ``owner_maintenance``), and the token endpoint gets one
 SECURITY DEFINER look-up, ``rls_integration_client_organisation``: the
-organisation of a client by its public client_id, nothing else (EXECUTE
-revoked from PUBLIC; migrations/env.py grants it to the app role). The
-definitions are frozen copies of 0004's helpers.
+organisation id of a client by its public client_id, and only for a live
+client (not disconnected) of an organisation that is active and approved (no
+application, or an approved one); NULL for anything else, and nothing but
+that id. Like 0004's: ``search_path`` pinned to ``public, pg_temp``, run in
+the owner's maintenance scope for its one query (the caller's scope put
+back), EXECUTE revoked from PUBLIC (migrations/env.py grants it to the app
+role only). The definitions are frozen copies of 0004's helpers.
 
 Downgrading drops the function, the policies and the tables (every connected
 system stops working).
@@ -50,7 +54,11 @@ MAINTENANCE = "current_setting('app.scope', true) = 'maintenance'"
 TABLES = ("integration_clients", "integration_assertions", "integration_requests", "integration_idempotency",
           "webhook_deliveries", "integration_payout_changes")
 LOOKUP = "rls_integration_client_organisation(p_client_id text)"
-LOOKUP_QUERY = "SELECT organisation_id FROM integration_clients WHERE client_id = p_client_id"
+LOOKUP_QUERY = ("SELECT c.organisation_id FROM integration_clients c "
+                "JOIN organisations o ON o.id = c.organisation_id "
+                "LEFT JOIN organisation_applications a ON a.organisation_id = c.organisation_id "
+                "WHERE c.client_id = p_client_id AND c.revoked_at IS NULL AND o.status = 'active' "
+                "AND (a.organisation_id IS NULL OR a.status = 'approved')")
 
 
 def _signature(name: str) -> str:
