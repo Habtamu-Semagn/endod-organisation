@@ -25,7 +25,7 @@ function messageOf(body: unknown, status: number): { message: string; code?: str
 }
 
 /** The portal's own pages (where a `next` after sign-in may lead). */
-const PORTAL_PATH = /^\/(claims|employees|payments|reports|settings)?(\/[A-Za-z0-9/_?=&%.-]*)?$/;
+const PORTAL_PATH = /^\/(claims|employees|payments|reports|settings|connect)?(\/[A-Za-z0-9/_?=&%.-]*)?$/;
 
 /** Where the browser goes when the session is gone or half-finished. */
 export function goToLogin() {
