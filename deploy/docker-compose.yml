@@ -17,8 +17,9 @@
 # as "endod-organisation-integrations", and nginx publishes only that prefix
 # at api.endod-health.com/organisation/v1/ (README.md, "Integration API").
 # Its access tokens are signed with the key in INTEGRATIONS_SIGNING_KEY_FILE
-# (mounted read-only into the API and the worker). The worker sends the
-# webhook events and forgets old request logs.
+# (mounted read-only into the API only). The worker sends the webhook events
+# and forgets old request logs; it gets neither that key nor any network but
+# its own.
 #   docker network create endod-bus   # once per host, if it does not exist yet
 #
 #   cd deploy && cp .env.example .env   # then fill it in
@@ -129,17 +130,8 @@ services:
     environment:
       ORG_ENVIRONMENT: production
       ORG_DATABASE_URL: ${ORG_DATABASE_URL:?set ORG_DATABASE_URL (the org_app role) in deploy/.env}
-      # Opens the sealed webhook secrets and event bodies.
+      # Opens the sealed webhook secrets and event bodies (and nothing signs with it here).
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (at least 32 random characters)}
-      INTEGRATIONS_SIGNING_KEY_FILE: /run/secrets/integrations-signing.pem
-      INTEGRATIONS_PUBLIC_URL: ${INTEGRATIONS_PUBLIC_URL:-https://api.endod-health.com/organisation/v1}
-    volumes:
-      - type: bind
-        source: ${INTEGRATIONS_SIGNING_KEY_FILE:-/opt/endod-organisation/deploy/keys/integrations-signing.pem}
-        target: /run/secrets/integrations-signing.pem
-        read_only: true
-        bind:
-          create_host_path: false
     healthcheck:
       disable: true
     # Its own network only: Postgres, and the internet for webhooks.

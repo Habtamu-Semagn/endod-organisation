@@ -234,8 +234,16 @@ organisation table). The API is served under `/integrations/v1` (its own app,
 - **Data:** employees (`employees.read`, `employees.write`: upsert by employee number,
   all or nothing, at most 500 a request, idempotent by content and with
   `Idempotency-Key`; deactivate), claims (`claims.read`, never receipt files) and payout
-  batches (`payments.read`), JSON. Payout changes are audited with masked accounts like
-  the portal's. A Test connection is checked the same way and stores nothing.
+  batches (`payments.read`, no account numbers), JSON. Endod IDs are never set through
+  the API (an admin links them in the portal).
+- **Payout accounts:** changing them needs its own scope, `employees.payout.write`
+  (off by default, a red warning in the portal); each change is audited masked, listed
+  under the connection's Advanced section, announced on the Overview, and **held**: the
+  employee's claims stay out of payout batches for 24 hours unless an admin confirms it
+  (`backend/app/payout_holds.py`). Reads mask accounts to the last 4 digits unless the
+  connection has `employees.payout.read`.
+- **Test connections** read synthetic sample data only, store nothing and receive no
+  real events (only "Send test event").
 - **Webhooks:** `claim.approved`, `claim.rejected`, `batch.paid`, `employee.changed`,
   signed `Endod-Signature: t=..,v1=..` (HMAC-SHA256), sent by the worker with retries
   for 24 hours, https and public addresses only (checked at every send, no redirects).
@@ -243,9 +251,17 @@ organisation table). The API is served under `/integrations/v1` (its own app,
   per client and address and 30 per address; the request log keeps method, path, status, client,
   time, duration and address for 30 days, never a body. Reads, writes and token
   requests are audited.
-- **Who may call:** only our nginx (`X-Endod-Edge-Key` = `EDGE_SHARED_SECRET`, which also
-  names the caller's address in `X-Endod-Client-IP`); without that secret the
-  integration API answers 503 in production. It neither needs nor accepts the BFF secret.
+- **Who may call:** only our nginx (`X-Endod-Edge-Key` = `EDGE_SHARED_SECRET`); without
+  that secret the integration API answers 503 in production. It neither needs nor
+  accepts the BFF secret.
+- **The caller's address** (IP restrictions, the request log, rate limits) comes only
+  from `X-Endod-Client-IP` on a request carrying the edge key (`app/api/integrations.py`
+  `edge_address`); `X-Forwarded-For` and the TCP peer are ignored. The shared nginx
+  (dedan-health `deploy/shared-nginx/endod.conf`) always overwrites it with
+  `$endod_client_ip`: Cloudflare's `CF-Connecting-IP` only when the connection comes from
+  one of Cloudflare's published ranges (`geo $endod_from_cloudflare`), else
+  `$remote_addr`, so a client cannot choose it. Keep those ranges in sync with
+  https://www.cloudflare.com/ips/.
 
 ### Deploying it
 
@@ -261,7 +277,8 @@ organisation table). The API is served under `/integrations/v1` (its own app,
    chmod 0400 /opt/endod-organisation/deploy/keys/integrations-signing.pem
    ```
 
-   `deploy/docker-compose.yml` mounts it read-only into the API and the worker at
+   `deploy/docker-compose.yml` mounts it read-only into the API only (the worker, which
+   only sends webhooks, never gets it) at
    `/run/secrets/integrations-signing.pem` (another host path: `INTEGRATIONS_SIGNING_KEY_FILE`
    in `deploy/.env`; compose refuses to start if the file is missing). Without it the
    integration API answers 503; the portal runs. Replacing it invalidates tokens issued
@@ -277,8 +294,9 @@ organisation table). The API is served under `/integrations/v1` (its own app,
    location /organisation/v1/ {
        proxy_pass http://endod-organisation-integrations:8000/integrations/v1/;
        proxy_set_header Host $host;
-       proxy_set_header X-Endod-Client-IP $endod_client_ip;   # as the portal's block: CF-Connecting-IP via Cloudflare, else $remote_addr
-       proxy_set_header X-Endod-Edge-Key "<EDGE_SHARED_SECRET>";
+       # Always overwritten: CF-Connecting-IP only from Cloudflare's ranges, else $remote_addr (endod.conf).
+       proxy_set_header X-Endod-Client-IP $endod_client_ip;
+       include /etc/nginx/endod/edge-key.conf;   # X-Endod-Edge-Key, never in git
        proxy_set_header X-Forwarded-Proto $scheme;
        proxy_redirect off;
        client_max_body_size 3m;
