@@ -51,7 +51,8 @@ const RULES: Rule[] = [
   // organisations; every change needs a fresh code, which the API checks.
   { pattern: /^connections$/, methods: ["GET", "POST"] },
   { pattern: new RegExp(`^connections/${ID}$`), methods: ["GET"] },
-  { pattern: new RegExp(`^connections/${ID}/(requests|deliveries)$`), methods: ["GET"] },
+  { pattern: new RegExp(`^connections/${ID}/(requests|deliveries|payout-changes)$`), methods: ["GET"] },
+  { pattern: new RegExp(`^connections/${ID}/payout-changes/${ID}/confirm$`), methods: ["POST"] },
   {
     pattern: new RegExp(`^connections/${ID}/(disconnect|rotate-secret|ip-restriction|public-key|webhook|webhook/rotate-secret|webhook/test)$`),
     methods: ["POST"],

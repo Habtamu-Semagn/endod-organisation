@@ -6,7 +6,7 @@ import { Cancelled, usePortal } from "@/components/PortalShell";
 import { ErrorBanner, SuccessBanner, messageOf, useApi } from "@/components/ui";
 import CopyField from "@/components/connect/CopyField";
 import { apiFetch } from "@/lib/api";
-import type { Connection, Delivery, RequestLogEntry } from "@/lib/connect";
+import type { Connection, Delivery, PayoutChange, RequestLogEntry } from "@/lib/connect";
 import { formatDateTime } from "@/lib/format";
 
 const SECONDARY =
@@ -193,6 +193,7 @@ export default function AdvancedPanel({ connection, onChanged }: { connection: C
         </div>
       </Section>
 
+      {connection.scopes.includes("employees.payout.write") && <PayoutChanges base={base} />}
       <RequestLog base={base} />
       <Deliveries base={base} tick={logTick} />
 
@@ -319,6 +320,70 @@ function Deliveries({ base, tick }: { base: string; tick: number }) {
                   </td>
                   <td className="py-1 pr-3">{row.attempts}</td>
                   <td className="py-1">{row.last_status_code ?? row.last_error ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function PayoutChanges({ base }: { base: string }) {
+  const { runSensitive } = usePortal();
+  const { data, error, reload } = useApi<{ items: PayoutChange[] }>(`${base}/payout-changes`);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const confirm = async (change: PayoutChange) => {
+    setActionError(null);
+    try {
+      await runSensitive(() => apiFetch(`${base}/payout-changes/${change.id}/confirm`, { method: "POST" }));
+      reload();
+    } catch (e) {
+      if (!(e instanceof Cancelled)) setActionError(messageOf(e, "The change could not be confirmed."));
+    }
+  };
+  const account = (side: PayoutChange["before"]) => (side.method ? `${side.method} ${side.account ?? ""}` : "none");
+  return (
+    <Section
+      title="Payout account changes"
+      hint="Changes this system made (account numbers masked). Each waits 24 hours before it can be paid, unless you confirm it."
+    >
+      <ErrorBanner message={error ?? actionError} />
+      {data && data.items.length === 0 && <p className="font-body-sm text-body-sm text-on-surface-variant">No changes yet.</p>}
+      {data && data.items.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left font-body-sm text-body-sm" data-testid="payout-changes">
+            <thead className="text-outline">
+              <tr>
+                <th className="py-1 pr-3 font-semibold">Time</th>
+                <th className="py-1 pr-3 font-semibold">Employee</th>
+                <th className="py-1 pr-3 font-semibold">From</th>
+                <th className="py-1 pr-3 font-semibold">To</th>
+                <th className="py-1 font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.items.map((row) => (
+                <tr key={row.id} className="border-t border-surface-variant" data-testid="payout-change">
+                  <td className="py-1 pr-3 whitespace-nowrap">{formatDateTime(row.created_at)}</td>
+                  <td className="py-1 pr-3">
+                    {row.employee_name ?? "—"} <span className="font-mono text-xs">{row.employee_number ?? ""}</span>
+                  </td>
+                  <td className="py-1 pr-3 font-mono text-xs">{account(row.before)}</td>
+                  <td className="py-1 pr-3 font-mono text-xs">{account(row.after)}</td>
+                  <td className="py-1">
+                    {row.held ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="text-amber-700 font-semibold">Held until {formatDateTime(row.hold_until)}</span>
+                        <button type="button" className={SECONDARY} onClick={() => confirm(row)}>
+                          Confirm
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="text-emerald-700 font-semibold">{row.confirmed_at ? "Confirmed" : "In effect"}</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

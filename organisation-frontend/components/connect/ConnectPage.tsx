@@ -10,6 +10,7 @@ import { apiFetch } from "@/lib/api";
 import {
   ABILITIES,
   NOTIFY_SCOPE,
+  PAYOUT_WRITE_SCOPE,
   timeAgo,
   type Connection,
   type ConnectionList,
@@ -226,8 +227,13 @@ function ConnectFlow({ onClose }: { onClose: () => void }) {
   const [result, setResult] = useState<NewConnectionResult | null>(null);
   const notify = chosen.includes(NOTIFY_SCOPE);
 
+  // Unticking an ability also unticks the ones that need it.
   const toggle = (scope: string) =>
-    setChosen((current) => (current.includes(scope) ? current.filter((s) => s !== scope) : [...current, scope]));
+    setChosen((current) =>
+      current.includes(scope)
+        ? current.filter((s) => s !== scope && ABILITIES.find((a) => a.scope === s)?.requires !== scope)
+        : [...current, scope]
+    );
 
   const connect = async () => {
     setBusy(true);
@@ -314,26 +320,45 @@ function ConnectFlow({ onClose }: { onClose: () => void }) {
           <div className="flex flex-col gap-space-md">
             <fieldset className="flex flex-col gap-2">
               <legend className="font-label-lg text-label-lg text-on-surface font-semibold mb-2">What can it do?</legend>
-              {ABILITIES.map((ability) => (
-                <label
-                  key={ability.scope}
-                  className={`flex cursor-pointer items-start gap-3 rounded-lg p-3 ring-1 ${
-                    chosen.includes(ability.scope) ? "ring-primary bg-surface-container-low" : "ring-surface-variant"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={chosen.includes(ability.scope)}
-                    onChange={() => toggle(ability.scope)}
-                  />
-                  <span>
-                    <span className="block font-body-md text-body-md text-on-surface font-semibold">{ability.label}</span>
-                    <span className="block font-body-sm text-body-sm text-on-surface-variant">{ability.hint}</span>
-                  </span>
-                </label>
-              ))}
+              {ABILITIES.map((ability) => {
+                const blocked = Boolean(ability.requires && !chosen.includes(ability.requires));
+                const on = chosen.includes(ability.scope);
+                return (
+                  <label
+                    key={ability.scope}
+                    className={`flex items-start gap-3 rounded-lg p-3 ring-1 ${ability.requires ? "ml-space-lg" : ""} ${
+                      blocked ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+                    } ${on ? (ability.sensitive ? "ring-error bg-error-container/30" : "ring-primary bg-surface-container-low") : "ring-surface-variant"}`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={on}
+                      disabled={blocked}
+                      onChange={() => toggle(ability.scope)}
+                    />
+                    <span>
+                      <span className="block font-body-md text-body-md text-on-surface font-semibold">{ability.label}</span>
+                      <span className="block font-body-sm text-body-sm text-on-surface-variant">{ability.hint}</span>
+                    </span>
+                  </label>
+                );
+              })}
             </fieldset>
+            {chosen.includes(PAYOUT_WRITE_SCOPE) && (
+              <p
+                role="alert"
+                data-testid="payout-warning"
+                className="flex gap-2 rounded-lg bg-error-container p-3 font-body-sm text-body-sm text-on-error-container"
+              >
+                <span aria-hidden="true" className="material-symbols-outlined text-[20px]">warning</span>
+                <span>
+                  <strong>Careful: this system will be able to change where employees are paid.</strong> Anyone who gets
+                  its secret could send reimbursements to their own account. Every change waits 24 hours before it can be
+                  paid, unless you confirm it, and is shown on the Overview.
+                </span>
+              </p>
+            )}
             {notify && (
               <div className="flex flex-col gap-1">
                 <label htmlFor="notify-url" className="font-label-lg text-label-lg text-on-surface font-semibold">

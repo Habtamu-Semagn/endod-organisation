@@ -5,6 +5,7 @@ import { PASSWORD, api, passwordStep, reauthenticate, signedInAdmin, uniqueEmail
 // "Connect your system": the company's own systems and the integration API.
 
 const INTEGRATIONS = `${API_URL}/integrations/v1`;
+const PAYOUT_ABILITY = "Change employees' payout accounts (bank / Telebirr)";
 
 function basic(clientId: string, secret: string) {
   return { Authorization: `Basic ${Buffer.from(`${clientId}:${secret}`).toString("base64")}` };
@@ -20,6 +21,12 @@ async function connectSystem(page: Page, auth: Authenticator, name: string, abil
   await flow.getByRole("button", { name: "Next" }).click();
   await expect(flow.getByTestId("connect-step")).toHaveText("Step 2 of 3");
   for (const ability of abilities) await flow.getByText(ability, { exact: true }).click();
+  if (abilities.includes(PAYOUT_ABILITY)) {
+    // Granting payout changes: a red warning first.
+    await expect(flow.getByTestId("payout-warning")).toContainText("change where employees are paid");
+  } else {
+    await expect(flow.getByTestId("payout-warning")).toHaveCount(0);
+  }
   await flow.getByText(mode, { exact: true }).click();
   await flow.getByRole("button", { name: "Connect" }).click();
   // A fresh code from the authenticator (each test signs in a new admin: none was given yet).
@@ -185,11 +192,23 @@ test("an organisation that is not approved does not get the page", async ({ page
 
 test("end to end: a token, employees synced from the HR system, and they appear in the Employees screen", async ({ page }) => {
   const { auth } = await signedInAdmin(page, "e2e-sync");
-  const { clientId, secret } = await connectSystem(page, auth, "Payroll sync", ["Sync employees from your HR system"]);
+  // Without "Sync employees" ticked, the payout ability cannot be ticked.
+  await page.goto("/connect");
+  await page.getByRole("button", { name: "Connect a system" }).click();
+  const flow = page.getByRole("dialog", { name: "Connect a system" });
+  await flow.getByLabel("What is the system called?").fill("Probe");
+  await flow.getByRole("button", { name: "Next" }).click();
+  await expect(flow.getByRole("checkbox", { name: PAYOUT_ABILITY })).toBeDisabled();
+  await flow.getByRole("button", { name: "Close" }).click();
+
+  const { clientId, secret } = await connectSystem(page, auth, "Payroll sync", [
+    "Sync employees from your HR system",
+    PAYOUT_ABILITY,
+  ]);
   await page.getByRole("button", { name: "I saved the secret" }).click();
 
   // The company's system, as curl would: a token, then the employees.
-  const tokenResponse = await token(page, clientId, secret, "employees.write");
+  const tokenResponse = await token(page, clientId, secret, "employees.write employees.payout.write");
   expect(tokenResponse.status(), await tokenResponse.text()).toBe(200);
   const { access_token: accessToken, expires_in: expiresIn } = await tokenResponse.json();
   expect(expiresIn).toBe(300);
@@ -222,4 +241,17 @@ test("end to end: a token, employees synced from the HR system, and they appear 
   await expect(rows).toHaveCount(2);
   await expect(rows.filter({ hasText: "Hana Synced" })).toContainText("HR-E2E-1");
   await expect(rows.filter({ hasText: "Dawit Synced" })).toContainText("HR-E2E-2");
+
+  // The payout account set by the system: announced on the Overview, held until confirmed.
+  await page.goto("/");
+  await expect(page.getByTestId("payout-alert")).toContainText("1 payout account changed by Payroll sync in the last 24 h");
+  await page.getByTestId("payout-alert").getByRole("link", { name: "Review them" }).click();
+  const card = page.getByTestId("connection").filter({ hasText: "Payroll sync" });
+  await card.getByRole("button", { name: "Advanced" }).click();
+  const change = card.getByTestId("payout-change");
+  await expect(change).toContainText("Dawit Synced");
+  await expect(change).toContainText("cbe ****0004");
+  await expect(change).toContainText("Held until");
+  await change.getByRole("button", { name: "Confirm" }).click();
+  await expect(change).toContainText("Confirmed");
 });

@@ -65,11 +65,37 @@ export type Delivery = {
 
 /** The ability that asks for an address to send notifications to. */
 export const NOTIFY_SCOPE = "webhooks";
+/** The ability that can change where reimbursements are paid. */
+export const PAYOUT_WRITE_SCOPE = "employees.payout.write";
+
+export type Ability = {
+  scope: string;
+  label: string;
+  hint: string;
+  /** Only with this other ability. */
+  requires?: string;
+  /** Off unless ticked, with a red warning. */
+  sensitive?: boolean;
+};
 
 /** The checkboxes of step 2, in order, in plain words. */
-export const ABILITIES: { scope: string; label: string; hint: string }[] = [
+export const ABILITIES: Ability[] = [
   { scope: "employees.write", label: "Sync employees from your HR system", hint: "Add and update employees automatically" },
-  { scope: "employees.read", label: "See employee list", hint: "Employees, dependants and payout details" },
+  {
+    scope: PAYOUT_WRITE_SCOPE,
+    label: "Change employees' payout accounts (bank / Telebirr)",
+    hint: "Where reimbursements are paid. Each change waits 24 hours, unless you confirm it",
+    requires: "employees.write",
+    sensitive: true,
+  },
+  { scope: "employees.read", label: "See employee list", hint: "Employees and dependants; account numbers hidden" },
+  {
+    scope: "employees.payout.read",
+    label: "See employees' full payout accounts",
+    hint: "Full bank and Telebirr account numbers",
+    requires: "employees.read",
+    sensitive: true,
+  },
   { scope: "claims.read", label: "See claims and their status", hint: "Pending, approved, rejected or paid" },
   { scope: "payments.read", label: "See payments", hint: "Payout batches and whether they are paid" },
   { scope: NOTIFY_SCOPE, label: "Get notified when claims are approved or paid", hint: "Your system is told right away" },
@@ -103,3 +129,17 @@ export function timeAgo(iso: string | null, now: number = Date.now()): string {
   const count = Math.max(1, Math.round(seconds / size));
   return `${count} ${label}${count === 1 ? "" : "s"} ago`;
 }
+
+/** A payout account changed by a connected system (masked), held for 24 hours unless confirmed. */
+export type PayoutChange = {
+  id: string;
+  employee_id: string;
+  employee_name: string | null;
+  employee_number: string | null;
+  before: { method: string | null; account: string | null };
+  after: { method: string | null; account: string | null };
+  created_at: string;
+  hold_until: string;
+  confirmed_at: string | null;
+  held: boolean;
+};
