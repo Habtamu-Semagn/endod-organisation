@@ -137,15 +137,17 @@ def recovery_code_hash(code: str) -> str:
 
 # --- TOTP secrets at rest ----------------------------------------------------------------
 
-def seal(plaintext: str) -> str:
-    """Encrypt a TOTP secret (AES-256-GCM under a key derived from SESSION_SECRET)."""
+def seal(plaintext: str, purpose: str = "totp") -> str:
+    """Encrypt a TOTP secret (AES-256-GCM under a key derived from SESSION_SECRET).
+    Other secrets kept at rest (webhook signing secrets and queued event bodies
+    of the integration API) use their own ``purpose``: a separate key each."""
     nonce = os.urandom(12)
-    sealed = AESGCM(_key("totp")).encrypt(nonce, plaintext.encode(), b"totp")
+    sealed = AESGCM(_key(purpose)).encrypt(nonce, plaintext.encode(), purpose.encode())
     return "v1:" + base64.urlsafe_b64encode(nonce + sealed).decode()
 
 
-def unseal(stored: str) -> str:
+def unseal(stored: str, purpose: str = "totp") -> str:
     if not stored.startswith("v1:"):
         raise ValueError("unknown sealed format")
     raw = base64.urlsafe_b64decode(stored[3:].encode())
-    return AESGCM(_key("totp")).decrypt(raw[:12], raw[12:], b"totp").decode()
+    return AESGCM(_key(purpose)).decrypt(raw[:12], raw[12:], purpose.encode()).decode()

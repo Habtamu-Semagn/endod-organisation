@@ -40,6 +40,12 @@ OWNED_BY = {
     "setup_tokens": "admin_id = :admin",
     "login_throttles": "admin_id = :admin",
     "audit_events": "organisation_id = :organisation",
+    # Migration 0006: the integration API.
+    "integration_clients": "organisation_id = :organisation",
+    "integration_assertions": "organisation_id = :organisation",
+    "integration_requests": "organisation_id = :organisation",
+    "integration_idempotency": "organisation_id = :organisation",
+    "webhook_deliveries": "organisation_id = :organisation",
 }
 #: Tables without row-level security, and why: per-address sign-in counters
 #: (no organisation's data, needed before any organisation is known).
@@ -60,8 +66,9 @@ def _seed(name):
     from app.db import platform_session, utcnow
     from app.models import (
         AdminSession, ApplicationDocument, AuditResult, BenefitPolicy, Claim, ClaimItem, Dependant, Employee,
-        LoginThrottle, Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode,
-        SetupToken,
+        IntegrationAssertion, IntegrationClient, IntegrationIdempotency, IntegrationRequest, LoginThrottle,
+        Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode, SetupToken,
+        WebhookDelivery,
     )
 
     now = utcnow()
@@ -96,8 +103,22 @@ def _seed(name):
         s.flush()
         s.add(ClaimItem(claim_id=claim.id, position=1, medicine="Medicine", quantity=1, unit_price_santim=100,
                         line_total_santim=100))
+        client = IntegrationClient(organisation_id=org.id, client_id=f"endod_live_{_hex(24)}", name="HR system",
+                                   scopes="employees.read", mode="live", auth_method="client_secret")
+        s.add(client)
+        s.flush()
+        s.add_all([
+            IntegrationAssertion(organisation_id=org.id, client_pk=client.id, jti=_hex(), expires_at=now),
+            IntegrationRequest(organisation_id=org.id, client_pk=client.id, method="GET", path="/x", status=200,
+                               duration_ms=1),
+            IntegrationIdempotency(organisation_id=org.id, client_pk=client.id, key="k", request_hash="0" * 64,
+                                   status_code=200, response="{}"),
+            WebhookDelivery(organisation_id=org.id, client_pk=client.id, event_id="evt_1", event_type="x",
+                            status="pending", attempts=0),
+        ])
         audit.record(s, audit.ORG_CREATED, AuditResult.SUCCESS, organisation_id=org.id)
-        return {"organisation": org.id, "admin": admin.id, "employee": employee.id, "claim": claim.id}
+        return {"organisation": org.id, "admin": admin.id, "employee": employee.id, "claim": claim.id,
+                "client": client.id, "client_id": client.client_id}
 
 
 def _foreign_row(table, b):
@@ -105,8 +126,9 @@ def _foreign_row(table, b):
     from app.db import utcnow
     from app.models import (
         AdminSession, ApplicationDocument, AuditEvent, BenefitPolicy, Claim, ClaimItem, Dependant, Employee,
-        LoginThrottle, Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode,
-        SetupToken,
+        IntegrationAssertion, IntegrationClient, IntegrationIdempotency, IntegrationRequest, LoginThrottle,
+        Organisation, OrganisationApplication, OrgAdmin, PaymentBatch, ReceiptFile, RecoveryCode, SetupToken,
+        WebhookDelivery,
     )
 
     org, later = b["organisation"], utcnow() + timedelta(hours=1)
@@ -138,6 +160,18 @@ def _foreign_row(table, b):
         "setup_tokens": lambda: SetupToken(admin_id=b["admin"], token_hash=_hex(), expires_at=later),
         "login_throttles": lambda: LoginThrottle(admin_id=b["admin"], ip="203.0.113.10", failures=1),
         "audit_events": lambda: AuditEvent(action="sign_in", result="success", organisation_id=org),
+        "integration_clients": lambda: IntegrationClient(organisation_id=org, client_id=f"endod_live_{_hex(24)}",
+                                                         name="Sneaky", scopes="employees.read", mode="live",
+                                                         auth_method="client_secret"),
+        "integration_assertions": lambda: IntegrationAssertion(organisation_id=org, client_pk=b["client"], jti=_hex(),
+                                                               expires_at=later),
+        "integration_requests": lambda: IntegrationRequest(organisation_id=org, client_pk=b["client"], method="GET",
+                                                           path="/y", status=200, duration_ms=1),
+        "integration_idempotency": lambda: IntegrationIdempotency(organisation_id=org, client_pk=b["client"],
+                                                                  key="k2", request_hash="0" * 64, status_code=200,
+                                                                  response="{}"),
+        "webhook_deliveries": lambda: WebhookDelivery(organisation_id=org, client_pk=b["client"], event_id="evt_2",
+                                                      event_type="x", status="pending", attempts=0),
     }[table]()
 
 
@@ -303,6 +337,8 @@ def test_the_look_up_functions_answer_one_thing_and_leave_no_scope_behind(orgs):
         assert rls.tin_taken(session, b_tin, a["organisation"]) is True
         assert rls.tin_taken(session, b_tin, b["organisation"]) is False
         assert rls.tin_taken(session, "0000000000", a["organisation"]) is False
+        assert rls.integration_client_organisation(session, b["client_id"]) == b["organisation"]
+        assert rls.integration_client_organisation(session, "endod_live_nobody") is None
         assert session.scalar(text("SELECT coalesce(current_setting('app.scope', true), '')")) == ""
         assert session.scalar(select(func.count()).select_from(AdminSession)) == 0
 
@@ -340,7 +376,8 @@ def test_the_app_role_cannot_call_anything_else_as_the_owner(db):
             "WHERE p.prosecdef AND p.pronamespace = 'public'::regnamespace ORDER BY 1")).all()
     assert [tuple(r) for r in rows] == [
         ("rls_admin_organisation", False), ("rls_email_taken", False), ("rls_record_orgless_event", False),
-        ("rls_session_organisation", False), ("rls_setup_link_organisation", False), ("rls_tin_taken", False)]
+        ("rls_integration_client_organisation", False), ("rls_session_organisation", False),
+        ("rls_setup_link_organisation", False), ("rls_tin_taken", False)]
 
 
 @pytest.mark.parametrize("scope", ["platform", "maintenance"])

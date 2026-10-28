@@ -21,6 +21,7 @@ from app.api.common import ADDIS_ABABA, batch_payload, checked, claim_payload, c
 from app.auth import Principal, current_admin, fresh_admin
 from app.db import tenant_session, utcnow
 from app.errors import ApiError
+from app.integrations import webhooks
 from app.models import (
     AuditResult, BatchStatus, Claim, ClaimStatus, Employee, Organisation, PaymentBatch, PayoutMethod,
 )
@@ -223,6 +224,8 @@ def mark_paid(batch_id: str, body: PaidIn, principal: Principal = Depends(fresh_
             audit.by(session, principal, audit.BATCH_PAID, target_type="batch", target_id=batch.id,
                      target_name=batch_code(batch.number),
                      detail={"reference": reference, "claims": batch.claim_count, "total_santim": batch.total_santim})
+            session.flush()
+            webhooks.batch_event(session, batch)
             return _detail(session, batch)
     raise failure
 

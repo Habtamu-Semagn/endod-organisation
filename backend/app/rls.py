@@ -23,7 +23,7 @@ from typing import Optional
 from sqlalchemy import select, text
 
 from app.db import utcnow
-from app.models import AdminSession, Organisation, OrgAdmin, OrgStatus, SetupToken
+from app.models import AdminSession, IntegrationClient, Organisation, OrgAdmin, OrgStatus, SetupToken
 
 #: The SECURITY DEFINER functions migration 0004 creates (the app role may execute only these).
 FUNCTIONS = (
@@ -33,11 +33,22 @@ FUNCTIONS = (
     "rls_email_taken(text)",
     "rls_tin_taken(text, text)",
     "rls_record_orgless_event(text, timestamptz, text, text, text, text, text, text, text, text)",
+    # Migration 0006: the integration API's token endpoint.
+    "rls_integration_client_organisation(text)",
 )
 
 
 def postgres(session) -> bool:
     return session.get_bind().dialect.name == "postgresql"
+
+
+def integration_client_organisation(session, client_id: str) -> Optional[str]:
+    """The organisation of the integration client with this (public) client_id,
+    a disconnected one too (the token endpoint refuses it afterwards, after the
+    same work), or None (app.integrations.tokens)."""
+    if postgres(session):
+        return session.scalar(text("SELECT rls_integration_client_organisation(:c)"), {"c": client_id})
+    return session.scalar(select(IntegrationClient.organisation_id).where(IntegrationClient.client_id == client_id))
 
 
 def admin_organisation(session, email: str) -> Optional[str]:

@@ -119,3 +119,34 @@ def test_deleting_an_employee_still_takes_their_dependants_and_override(orgs):
     with platform_session() as session:
         assert session.scalar(select(Dependant.id).where(Dependant.employee_id == a["employee"])) is None
         assert session.scalar(select(BenefitPolicy.id).where(BenefitPolicy.employee_id == a["employee"])) is None
+
+
+@pytest.mark.parametrize("table", ["integration_assertions", "integration_requests", "integration_idempotency",
+                                   "webhook_deliveries"])
+def test_integration_rows_point_only_at_their_own_organisations_client(orgs, table):
+    """Migration 0006: (organisation_id, client_pk) -> integration_clients (organisation_id, id)."""
+    from app.db import platform_session, utcnow
+    from app.models import IntegrationAssertion, IntegrationIdempotency, IntegrationRequest, WebhookDelivery
+
+    a, b = orgs
+
+    def row(client_pk):
+        org = a["organisation"]
+        return {
+            "integration_assertions": lambda: IntegrationAssertion(organisation_id=org, client_pk=client_pk,
+                                                                   jti=f"jti-{client_pk}", expires_at=utcnow()),
+            "integration_requests": lambda: IntegrationRequest(organisation_id=org, client_pk=client_pk, method="GET",
+                                                               path="/z", status=200, duration_ms=1),
+            "integration_idempotency": lambda: IntegrationIdempotency(organisation_id=org, client_pk=client_pk,
+                                                                      key=f"key-{client_pk}", request_hash="0" * 64,
+                                                                      status_code=200, response="{}"),
+            "webhook_deliveries": lambda: WebhookDelivery(organisation_id=org, client_pk=client_pk, event_id="evt_9",
+                                                          event_type="x", status="pending", attempts=0),
+        }[table]()
+
+    with pytest.raises(IntegrityError):
+        with platform_session() as session:
+            session.add(row(b["client"]))
+            session.flush()
+    with platform_session() as session:
+        session.add(row(a["client"]))
