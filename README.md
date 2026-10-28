@@ -24,6 +24,7 @@ the seam for them is `backend/app/claims_intake.py`.
 | `backend/` | The API: FastAPI, SQLAlchemy, Alembic, its own Postgres |
 | `organisation-frontend/` | The web app: Next.js 16 (Habtamu Semagn's design), with a BFF under `app/api` |
 | `deploy/` | `docker-compose.yml` (project `endod-organisation`), the Postgres role script, `.env.example` |
+| `docs/integrations.md` | The integration API's guide for companies' developers (served at `/integrations/v1/docs`) |
 | `.github/workflows/ci.yml` | pytest on SQLite and PostgreSQL (with the role tests), lint, types, build, Playwright, Docker images |
 
 The design follows the Endod super admin service (`endod-superadmin`).
@@ -45,7 +46,7 @@ The design follows the Endod super admin service (`endod-superadmin`).
   applications with the same TIN are allowed (no squatting) and flagged to Endod as
   `duplicate_tin`. Emails are not verified (`email_verified: false`), so drafts not
   submitted within 14 days are deleted with their admins, sessions and documents (audited
-  as `application_expired`); with no worker in this deployment, the sweep runs when an
+  as `application_expired`); the sweep (not the worker's job) runs when an
   application is started, when Endod lists applications and at sign-in. **Until
   Endod approves it, the organisation is locked**: its admins reach only the application,
   the Under review page and sign-out; every other API route answers 403
@@ -108,7 +109,8 @@ The design follows the Endod super admin service (`endod-superadmin`).
   with a 30-minute idle timeout and a 12-hour absolute limit.
 - **Re-authentication**: approving or rejecting a claim, creating, cancelling or marking
   paid a payout batch, changing payout accounts, importing employees, and changing the
-  policy (or an employee's own policy) or the payout settings each need a TOTP code given
+  policy (or an employee's own policy) or the payout settings, and connecting, changing or
+  disconnecting a system (Connect your system) each need a TOTP code given
   within the last 10 minutes.
 - **BFF**: the browser talks only to the web app; the web app calls the API with
   `X-BFF-Secret` (the API refuses everything except `/health` without it) and passes
@@ -204,6 +206,86 @@ endod-bus` once per host) as `endod-organisation-api`, keeping its default netwo
 Postgres. Set `ORG_PLATFORM_KEY` (at least 32 random characters) in `deploy/.env` and give
 the super admin the same value as its `ORGANISATION_PLATFORM_KEY`, with
 `ORGANISATION_API_URL=http://endod-organisation-api:8000`.
+
+## Integration API (companies' own systems)
+
+Admins of organisations approved by Endod connect their own HR or payroll system on
+**Connect your system** in the portal: a name, what it may do in plain words ("Sync
+employees from your HR system", "See employee list", "See claims and their status",
+"See payments", "Get notified when claims are approved or paid", with a webhook URL),
+Live or Test; then the client ID and secret, shown once. Connecting, disconnecting,
+rotating and every change under **Advanced** (IP restriction, public-key
+authentication, the webhook and its secret) need a fresh authenticator code
+(`fresh_admin`) and are audited. Each connection is an OAuth 2.0 client
+(`integration_clients`, migration 0006, under row-level security like every other
+organisation table). The API is served under `/integrations/v1` (its own app,
+`backend/app/api/integrations.py`; OpenAPI at `/integrations/v1/openapi.json`, docs at
+`/integrations/v1/docs`) and published by nginx at `INTEGRATIONS_PUBLIC_URL` (default
+`https://api.endod-health.com/organisation/v1`). The developers' guide is
+[docs/integrations.md](docs/integrations.md) (served from
+`backend/app/integrations/guide.md`, a copy a test keeps identical).
+
+- **Tokens:** `POST /oauth/token`, client secret (argon2id hash only, shown once) or
+  `private_key_jwt` (each `jti` used once). Access tokens: ES256 JWTs signed with the
+  key in `INTEGRATIONS_SIGNING_KEY_FILE`, 5 minutes, `kid` published at
+  `/.well-known/jwks.json`. Every call checks the client again in the database
+  (disconnected, credentials rotated, organisation suspended or not approved, address
+  not allowed, scope): disconnecting or suspending stops it at once.
+- **Data:** employees (`employees.read`, `employees.write`: upsert by employee number,
+  all or nothing, at most 500 a request, idempotent by content and with
+  `Idempotency-Key`; deactivate), claims (`claims.read`, never receipt files) and payout
+  batches (`payments.read`), JSON. Payout changes are audited with masked accounts like
+  the portal's. A Test connection is checked the same way and stores nothing.
+- **Webhooks:** `claim.approved`, `claim.rejected`, `batch.paid`, `employee.changed`,
+  signed `Endod-Signature: t=..,v1=..` (HMAC-SHA256), sent by the worker with retries
+  for 24 hours, https and public addresses only (checked at every send, no redirects).
+- **Limits and logs:** 60 requests a minute per connection, token requests 20 a minute
+  per client and address and 30 per address; the request log keeps method, path, status, client,
+  time, duration and address for 30 days, never a body. Reads, writes and token
+  requests are audited.
+- **Who may call:** only our nginx (`X-Endod-Edge-Key` = `EDGE_SHARED_SECRET`, which also
+  names the caller's address in `X-Endod-Client-IP`); without that secret the
+  integration API answers 503 in production. It neither needs nor accepts the BFF secret.
+
+### Deploying it
+
+1. `git pull`, then `docker compose --env-file .env up -d --build`: the `migrate`
+   service runs migration 0006 (new tables only, with their row-level security and the
+   `rls_integration_client_organisation` look-up), and the new `worker` service starts.
+2. Before that, create the signing key once, on the server, as root:
+
+   ```sh
+   mkdir -p /opt/endod-organisation/deploy/keys
+   openssl ecparam -name prime256v1 -genkey -noout -out /opt/endod-organisation/deploy/keys/integrations-signing.pem
+   chown 10004:10004 /opt/endod-organisation/deploy/keys/integrations-signing.pem
+   chmod 0400 /opt/endod-organisation/deploy/keys/integrations-signing.pem
+   ```
+
+   `deploy/docker-compose.yml` mounts it read-only into the API and the worker at
+   `/run/secrets/integrations-signing.pem` (another host path: `INTEGRATIONS_SIGNING_KEY_FILE`
+   in `deploy/.env`; compose refuses to start if the file is missing). Without it the
+   integration API answers 503; the portal runs. Replacing it invalidates tokens issued
+   before (they live 5 minutes).
+3. `deploy/.env`: `INTEGRATIONS_PUBLIC_URL` (the default is right for
+   api.endod-health.com), and `EDGE_SHARED_SECRET` is now required by the API too.
+4. DNS: `api.endod-health.com` to the server (through Cloudflare, like the portal).
+5. nginx (the shared edge): map only that prefix to the API, which joins the edge
+   network as `endod-organisation-integrations`, with the same client-address and
+   edge-key headers as the portal's server block:
+
+   ```nginx
+   location /organisation/v1/ {
+       proxy_pass http://endod-organisation-integrations:8000/integrations/v1/;
+       proxy_set_header Host $host;
+       proxy_set_header X-Endod-Client-IP $endod_client_ip;   # as the portal's block: CF-Connecting-IP via Cloudflare, else $remote_addr
+       proxy_set_header X-Endod-Edge-Key "<EDGE_SHARED_SECRET>";
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_redirect off;
+       client_max_body_size 3m;
+   }
+   ```
+
+   Nothing else of the API is published: the portal's routes still need the BFF secret.
 
 **Upgrading an existing database to row-level security** (0004 and 0005): the platform
 role must exist first; the init scripts only run on a new volume. As the superuser, once:
