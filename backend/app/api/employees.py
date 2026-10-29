@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from app import audit, csvutil, validation
+from app import audit, csvutil, payout_holds, validation
 from app.api.common import (
     bad, checked, claim_payload, csv_response, dependant_payload, employee_payload, like, today,
 )
@@ -24,6 +24,7 @@ from app.api.settings import PolicyRules, clean_exclusions, rules_payload
 from app.auth import Principal, current_admin, fresh_admin, require_fresh
 from app.db import tenant_session, utcnow
 from app.errors import ApiError
+from app.integrations import webhooks
 from app.models import (
     BenefitPolicy, Claim, ClaimStatus, Dependant, Employee, Relationship,
 )
@@ -86,7 +87,7 @@ class DependantIn(BaseModel):
     birth_date: Optional[date] = None
 
 
-def _clean(data: Dict[str, Any]) -> Dict[str, Any]:
+def clean_employee(data: Dict[str, Any]) -> Dict[str, Any]:
     """Validated and normalised fields (raises validation.Invalid)."""
     method, account = validation.payout(data.get("payout_method"), data.get("payout_account"))
     return {
@@ -190,7 +191,7 @@ def list_employees(
 
 @router.post("/employees", status_code=201)
 def create_employee(body: EmployeeIn, principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
-    fields = checked(_clean, body.model_dump())
+    fields = checked(clean_employee, body.model_dump())
     if payout_changes({}, fields):
         # Where reimbursements go: a fresh code, like any payout change.
         require_fresh(principal)
@@ -205,6 +206,7 @@ def create_employee(body: EmployeeIn, principal: Principal = Depends(current_adm
                      target_name=employee.name, detail={"employee_number": employee.employee_number})
             if payout_changes({}, fields):
                 _audit_payout(session, principal, employee, {}, fields, "create")
+            webhooks.employee_event(session, employee, "created", [k for k, v in fields.items() if v is not None])
             return employee_payload(employee, dependants=[], claims_count=0, spend_santim=0,
                                     has_policy_override=False)
     except IntegrityError as exc:  # a simultaneous insert of the same number
@@ -253,7 +255,7 @@ def _plan_import(session, org: str, text: str) -> Dict[str, Any]:
         errors: List[str] = []
         fields: Optional[Dict[str, Any]] = None
         try:
-            fields = _clean(raw)
+            fields = clean_employee(raw)
         except validation.Invalid as exc:
             errors.append(str(exc))
             # Find every problem in the row, not only the first.
@@ -329,14 +331,20 @@ def import_commit(body: ImportIn, principal: Principal = Depends(fresh_admin)) -
                         session.flush()
                         if payout_changes({}, row["fields"]):
                             _audit_payout(session, principal, employee, {}, row["fields"], "import")
+                        webhooks.employee_event(session, employee, "created",
+                                                [k for k, v in row["fields"].items() if v is not None])
                     elif row["action"] == "update":
                         employee = existing[row["employee_number"]]
                         before = {k: getattr(employee, k) for k in PAYOUT_FIELDS}
+                        changed_keys = [k for k, v in row["fields"].items() if getattr(employee, k) != v]
                         for key, value in row["fields"].items():
                             setattr(employee, key, value)
                         employee.updated_at = now
                         if payout_changes(before, row["fields"]):
                             _audit_payout(session, principal, employee, before, row["fields"], "import")
+                            # Set by an admin with a fresh code: a held change by a connected system ends.
+                            payout_holds.confirm_for_employee(session, org, employee.id, principal.admin_id)
+                        webhooks.employee_event(session, employee, "updated", changed_keys)
                 audit.by(session, principal, audit.EMPLOYEES_IMPORTED, target_type="organisation", target_id=org,
                          detail={"summary": plan["summary"]})
                 return _public_plan(plan)
@@ -386,7 +394,7 @@ def update_employee(employee_id: str, body: EmployeePatch,
         with tenant_session(principal.organisation_id) as session:
             employee = owned(session, Employee, employee_id, org, lock=True)
             current = {k: getattr(employee, k) for k in IMPORT_COLUMNS}
-            fields = checked(_clean, {**current, **changes})
+            fields = checked(clean_employee, {**current, **changes})
             _unique_or_400(session, org, fields, employee.id)
             changed = {k: v for k, v in fields.items() if getattr(employee, k) != v}
             if payout_changes(current, fields):
@@ -400,6 +408,10 @@ def update_employee(employee_id: str, body: EmployeePatch,
                          target_name=employee.name, detail={"fields": sorted(changed)})
             if payout_changes(current, fields):
                 _audit_payout(session, principal, employee, current, fields, "edit")
+                # Set by an admin with a fresh code: a held change by a connected system ends.
+                payout_holds.confirm_for_employee(session, org, employee.id, principal.admin_id)
+            if changed:
+                webhooks.employee_event(session, employee, "updated", changed)
             return _detail(session, principal, employee)
     except IntegrityError as exc:
         raise ApiError(409, "That employee number or Endod ID is already in use.", "DUPLICATE_EMPLOYEE") from exc
@@ -414,6 +426,7 @@ def _set_active(employee_id: str, principal: Principal, active: bool) -> Dict[st
             employee.updated_at = utcnow()
             audit.by(session, principal, audit.EMPLOYEE_ACTIVATED if active else audit.EMPLOYEE_DEACTIVATED,
                      target_type="employee", target_id=employee.id, target_name=employee.name)
+            webhooks.employee_event(session, employee, "activated" if active else "deactivated", ["active"])
         return _detail(session, principal, employee)
 
 
@@ -443,6 +456,7 @@ def add_dependant(employee_id: str, body: DependantIn, principal: Principal = De
         session.flush()
         audit.by(session, principal, audit.DEPENDANT_ADDED, target_type="employee", target_id=employee.id,
                  target_name=employee.name, detail={"dependant_id": dependant.id, "relationship": relationship})
+        webhooks.employee_event(session, employee, "updated", ["dependants"])
         return _detail(session, principal, employee)
 
 
@@ -459,6 +473,7 @@ def remove_dependant(employee_id: str, dependant_id: str,
             dependant.active = False
             audit.by(session, principal, audit.DEPENDANT_REMOVED, target_type="employee", target_id=employee.id,
                      target_name=employee.name, detail={"dependant_id": dependant.id})
+            webhooks.employee_event(session, employee, "updated", ["dependants"])
         return _detail(session, principal, employee)
 
 

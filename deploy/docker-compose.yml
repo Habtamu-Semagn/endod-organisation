@@ -11,6 +11,15 @@
 # super admin calls its /platform routes (company applications) with
 # X-Platform-Key = ORG_PLATFORM_KEY (docs/company-onboarding.md). Every other
 # route still needs the BFF secret, so nothing else on endod-bus can use them.
+#
+# The integration API for companies' own systems (docs/integrations.md) is
+# the same API under /integrations/v1: it also joins the shared edge network,
+# as "endod-organisation-integrations", and nginx publishes only that prefix
+# at api.endod-health.com/organisation/v1/ (README.md, "Integration API").
+# Its access tokens are signed with the key in INTEGRATIONS_SIGNING_KEY_FILE
+# (mounted read-only into the API only). The worker sends the webhook events
+# and forgets old request logs; it gets neither that key nor any network but
+# its own.
 #   docker network create endod-bus   # once per host, if it does not exist yet
 #
 #   cd deploy && cp .env.example .env   # then fill it in
@@ -79,15 +88,54 @@ services:
       # Endod's super admin sends it as X-Platform-Key to /platform/* over
       # endod-bus (its ORGANISATION_PLATFORM_KEY). Empty: the platform API answers 503.
       ORG_PLATFORM_KEY: ${ORG_PLATFORM_KEY:-}
+      # The integration API (docs/integrations.md): the key that signs its
+      # access tokens (mounted below), where nginx publishes it, and nginx's
+      # key (X-Endod-Edge-Key, the same as the web app's): without it the
+      # integration API answers 503, so nothing else on the edge network can
+      # call it and choose X-Endod-Client-IP.
+      INTEGRATIONS_SIGNING_KEY_FILE: /run/secrets/integrations-signing.pem
+      INTEGRATIONS_PUBLIC_URL: ${INTEGRATIONS_PUBLIC_URL:-https://api.endod-health.com/organisation/v1}
+      EDGE_SHARED_SECRET: ${EDGE_SHARED_SECRET:?set EDGE_SHARED_SECRET (at least 32 random characters)}
     volumes:
       # Receipt photos and scans, and companies' application documents, under
       # ids: <organisation id>/<file id>.
       - organisation_receipts:/data/receipts
+      # The integration API's token signing key (README.md, "Integration
+      # API"): read-only, never created if missing.
+      - type: bind
+        source: ${INTEGRATIONS_SIGNING_KEY_FILE:-/opt/endod-organisation/deploy/keys/integrations-signing.pem}
+        target: /run/secrets/integrations-signing.pem
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       # Its own network first: Postgres and the web app.
       default: {}
       endod_bus:
         aliases: [endod-organisation-api]
+      # nginx publishes the integration API from here, and only its prefix
+      # (location /organisation/v1/ -> /integrations/v1/; README.md).
+      shared_edge:
+        aliases: [endod-organisation-integrations]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Sends the integration API's webhook events (with retries for 24 hours,
+  # public https addresses only) and forgets request logs after 30 days.
+  worker:
+    build: ../backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    environment:
+      ORG_ENVIRONMENT: production
+      ORG_DATABASE_URL: ${ORG_DATABASE_URL:?set ORG_DATABASE_URL (the org_app role) in deploy/.env}
+      # Opens the sealed webhook secrets and event bodies (and nothing signs with it here).
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (at least 32 random characters)}
+    healthcheck:
+      disable: true
+    # Its own network only: Postgres, and the internet for webhooks.
+    networks: [default]
     depends_on:
       migrate:
         condition: service_completed_successfully

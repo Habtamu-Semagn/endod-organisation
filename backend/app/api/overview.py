@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 
+from app import payout_holds
 from app.api.common import today
 from app.auth import Principal, current_admin
 from app.db import tenant_session
@@ -49,4 +50,6 @@ def overview(principal: Principal = Depends(current_admin)) -> Dict[str, Any]:
             "employees": {"active": int(active), "linked_endod": int(linked), "claimants": int(claimants)},
             "policy": {"annual_limit_santim": base.annual_limit_santim, "copay_percent": base.copay_percent,
                        "dependants_covered": base.dependants_covered},
+            # Payout accounts changed by connected systems in the last 24 hours (app.payout_holds).
+            "payout_alerts": payout_holds.recent_by_connection(session, org),
         }

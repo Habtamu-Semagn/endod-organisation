@@ -20,10 +20,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 
 from app.db import utcnow
-from app.models import AdminSession, Organisation, OrgAdmin, OrgStatus, SetupToken
+from app.models import (
+    AdminSession, ApplicationStatus, IntegrationClient, Organisation, OrganisationApplication, OrgAdmin, OrgStatus,
+    SetupToken,
+)
 
 #: The SECURITY DEFINER functions migration 0004 creates (the app role may execute only these).
 FUNCTIONS = (
@@ -33,11 +36,30 @@ FUNCTIONS = (
     "rls_email_taken(text)",
     "rls_tin_taken(text, text)",
     "rls_record_orgless_event(text, timestamptz, text, text, text, text, text, text, text, text)",
+    # Migration 0006: the integration API's token endpoint.
+    "rls_integration_client_organisation(text)",
 )
 
 
 def postgres(session) -> bool:
     return session.get_bind().dialect.name == "postgresql"
+
+
+def integration_client_organisation(session, client_id: str) -> Optional[str]:
+    """The organisation of the live integration client with this (public)
+    client_id, only while that organisation is active and approved (no
+    application, or an approved one); None for an unknown or disconnected
+    client, or a suspended or unapproved organisation (app.integrations.tokens)."""
+    if postgres(session):
+        return session.scalar(text("SELECT rls_integration_client_organisation(:c)"), {"c": client_id})
+    return session.scalar(
+        select(IntegrationClient.organisation_id)
+        .join(Organisation, Organisation.id == IntegrationClient.organisation_id)
+        .outerjoin(OrganisationApplication, OrganisationApplication.organisation_id == IntegrationClient.organisation_id)
+        .where(IntegrationClient.client_id == client_id, IntegrationClient.revoked_at.is_(None),
+               Organisation.status == OrgStatus.ACTIVE,
+               or_(OrganisationApplication.organisation_id.is_(None),
+                   OrganisationApplication.status == ApplicationStatus.APPROVED)))
 
 
 def admin_organisation(session, email: str) -> Optional[str]:

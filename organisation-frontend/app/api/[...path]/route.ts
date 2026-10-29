@@ -47,6 +47,17 @@ const RULES: Rule[] = [
   { pattern: new RegExp(`^batches/${ID}$`), methods: ["GET"] },
   { pattern: new RegExp(`^batches/${ID}/(mark-paid|cancel)$`), methods: ["POST"] },
   { pattern: /^reports$/, methods: ["GET"] },
+  // "Connect your system" (backend app/api/connections.py): admins of approved
+  // organisations; every change needs a fresh code, which the API checks.
+  { pattern: /^connections$/, methods: ["GET", "POST"] },
+  { pattern: new RegExp(`^connections/${ID}$`), methods: ["GET"] },
+  { pattern: new RegExp(`^connections/${ID}/(requests|deliveries|payout-changes)$`), methods: ["GET"] },
+  { pattern: new RegExp(`^connections/${ID}/payout-changes/${ID}/confirm$`), methods: ["POST"] },
+  {
+    pattern: new RegExp(`^connections/${ID}/(disconnect|rotate-secret|ip-restriction|public-key|webhook|webhook/rotate-secret|webhook/test)$`),
+    methods: ["POST"],
+    maxBody: 70_000,
+  },
   // A company's own application (docs/company-onboarding.md): the account is
   // made signed out; the rest needs the applicant's session.
   { pattern: /^application\/start$/, methods: ["POST"], signedOut: true },

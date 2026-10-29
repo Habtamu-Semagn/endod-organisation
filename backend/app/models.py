@@ -569,3 +569,189 @@ class ClaimItem(Base):
         CheckConstraint("unit_price_santim > 0", name="price_positive"),
         CheckConstraint("line_total_santim = quantity * unit_price_santim", name="line_total"),
     )
+
+
+# --- the integration API for companies' own systems (app/integrations, docs/integrations.md) ----
+
+class IntegrationMode:
+    #: Changes real data.
+    LIVE = "live"
+    #: Checks everything and answers what would happen; stores nothing.
+    TEST = "test"
+    ALL = (LIVE, TEST)
+
+
+class IntegrationAuth:
+    #: A random secret (only its argon2id hash is kept).
+    SECRET = "client_secret"
+    #: A signed client assertion, checked against the client's public keys.
+    PRIVATE_KEY_JWT = "private_key_jwt"
+    ALL = (SECRET, PRIVATE_KEY_JWT)
+
+
+class DeliveryStatus:
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    ALL = (PENDING, DELIVERED, FAILED)
+
+
+class IntegrationClient(Base):
+    """A company system connected to the integration API (OAuth 2.0 client
+    credentials). Never deleted: disconnecting sets ``revoked_at``."""
+
+    __tablename__ = "integration_clients"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    #: Public (the OAuth client_id): endod_live_... or endod_test_...
+    client_id: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(80))
+    #: Granted scopes, space-separated (app/integrations/scopes.py).
+    scopes: Mapped[str] = mapped_column(String(400))
+    mode: Mapped[str] = mapped_column(String(4), default=IntegrationMode.LIVE)
+    auth_method: Mapped[str] = mapped_column(String(20), default=IntegrationAuth.SECRET)
+    #: argon2id hash of the client secret (client_secret only).
+    secret_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    #: The client's public keys (a JWKS; private_key_jwt only). Public: not encrypted.
+    jwks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Addresses it may call from (comma-separated CIDRs; empty: anywhere).
+    allowed_cidrs: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    #: Where events go (https only), and their signing secret (app.security.seal, "webhook").
+    webhook_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    webhook_secret: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    #: Plain id of the admin who connected it (kept for the record, like the other *_by columns).
+    created_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: When the credentials last changed (secret rotated, keys set): older tokens are refused.
+    credentials_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("mode IN ('live', 'test')", name="mode"),
+        CheckConstraint("auth_method IN ('client_secret', 'private_key_jwt')", name="auth_method"),
+        org_and_id("integration_clients"),
+    )
+
+
+class IntegrationAssertion(Base):
+    """A client assertion's ``jti``, kept until the assertion expires: each is used once."""
+
+    __tablename__ = "integration_assertions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    client_pk: Mapped[str] = mapped_column(String(32))
+    jti: Mapped[str] = mapped_column(String(255))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("client_pk", "jti", name="uq_integration_assertions_client_jti"),
+        same_org("client_pk", "integration_clients", "fk_integration_assertions_client_same_org", ondelete="CASCADE"),
+    )
+
+
+class IntegrationRequest(Base):
+    """One call to the integration API: never a body or a query string. Kept 30 days."""
+
+    __tablename__ = "integration_requests"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    client_pk: Mapped[str] = mapped_column(String(32))
+    method: Mapped[str] = mapped_column(String(8))
+    #: The path only.
+    path: Mapped[str] = mapped_column(String(300))
+    status: Mapped[int] = mapped_column(Integer)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_integration_requests_client_at", "client_pk", "at"),
+        same_org("client_pk", "integration_clients", "fk_integration_requests_client_same_org", ondelete="CASCADE"),
+    )
+
+
+class IntegrationIdempotency(Base):
+    """The answer to a request sent with an Idempotency-Key, replayed when the
+    same key comes again (for 24 hours)."""
+
+    __tablename__ = "integration_idempotency"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    client_pk: Mapped[str] = mapped_column(String(32))
+    key: Mapped[str] = mapped_column(String(255))
+    #: sha256 of the method, path and body: the same key with another request is refused.
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status_code: Mapped[int] = mapped_column(Integer)
+    response: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("client_pk", "key", name="uq_integration_idempotency_client_key"),
+        same_org("client_pk", "integration_clients", "fk_integration_idempotency_client_same_org",
+                 ondelete="CASCADE"),
+    )
+
+
+class IntegrationPayoutChange(Base):
+    """A payout method or account set by a connected system
+    (employees.payout.write). The employee's claims are kept out of payout
+    batches until ``hold_until`` (24 hours), unless an admin confirms the change
+    in the portal first (app.payout_holds). Accounts are kept masked only (the
+    employee row holds the real one)."""
+
+    __tablename__ = "integration_payout_changes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    employee_id: Mapped[str] = mapped_column(String(32))
+    client_pk: Mapped[str] = mapped_column(String(32))
+    before_method: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    before_account: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    after_method: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    after_account: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    hold_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Plain id of the admin who confirmed it (in the portal).
+    confirmed_by: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    __table_args__ = (
+        Index("ix_integration_payout_changes_employee", "employee_id", "hold_until"),
+        same_org("employee_id", "employees", "fk_integration_payout_changes_employee_same_org", ondelete="CASCADE"),
+        same_org("client_pk", "integration_clients", "fk_integration_payout_changes_client_same_org",
+                 ondelete="CASCADE"),
+    )
+
+
+class WebhookDelivery(Base):
+    """An event for a client's webhook, sent by the worker with retries. The
+    body (sealed at rest) is deleted once delivered or given up."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    organisation_id: Mapped[str] = mapped_column(ForeignKey("organisations.id"), index=True)
+    client_pk: Mapped[str] = mapped_column(String(32))
+    event_id: Mapped[str] = mapped_column(String(40))
+    event_type: Mapped[str] = mapped_column(String(40))
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default=DeliveryStatus.PENDING)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_webhook_deliveries_due", "status", "next_attempt_at"),
+        Index("ix_webhook_deliveries_client", "client_pk", "created_at"),
+        CheckConstraint("status IN ('pending', 'delivered', 'failed')", name="status"),
+        same_org("client_pk", "integration_clients", "fk_webhook_deliveries_client_same_org", ondelete="CASCADE"),
+    )
