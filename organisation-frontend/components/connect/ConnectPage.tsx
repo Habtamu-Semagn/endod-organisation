@@ -6,6 +6,7 @@ import { Cancelled, usePortal } from "@/components/PortalShell";
 import { ErrorBanner, SuccessBanner, messageOf, useApi } from "@/components/ui";
 import AdvancedPanel from "@/components/connect/AdvancedPanel";
 import CopyField from "@/components/connect/CopyField";
+import { Icon } from "@/components/Icon";
 import { apiFetch } from "@/lib/api";
 import {
   ABILITIES,
@@ -78,7 +79,7 @@ export default function ConnectPage() {
             }}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg font-semibold hover:bg-secondary transition-colors"
           >
-            <span aria-hidden="true" className="material-symbols-outlined text-[20px]">add_link</span>
+            <Icon aria-hidden="true" name="add_link" size={20} />
             Connect a system
           </button>
         </div>
@@ -89,7 +90,7 @@ export default function ConnectPage() {
       {!data && !error && <p className="font-body-sm text-body-sm text-on-surface-variant">Loading…</p>}
       {data && data.items.length === 0 && (
         <div className="bg-surface-container-lowest rounded-xl p-space-xl text-center flex flex-col items-center gap-2" data-testid="no-connections">
-          <span aria-hidden="true" className="material-symbols-outlined text-[32px] text-outline">hub</span>
+          <Icon aria-hidden="true" name="hub" size={32} className="text-outline" />
           <p className="font-headline-sm text-headline-sm text-on-surface font-semibold">No systems connected yet</p>
           <p className="font-body-md text-body-md text-on-surface-variant max-w-md">
             Click &ldquo;Connect a system&rdquo; to let your HR or payroll system work with TenaCare.
@@ -177,7 +178,7 @@ function ConnectionCard({
           onClick={onDisconnect}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-error font-label-md text-label-md font-semibold hover:bg-error-container transition-colors"
         >
-          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">link_off</span>
+          <Icon aria-hidden="true" name="link_off" size={18} />
           Disconnect
         </button>
       </div>
@@ -189,7 +190,7 @@ function ConnectionCard({
               key={ability}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-low font-body-sm text-body-sm text-on-surface"
             >
-              <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-primary">check</span>
+              <Icon aria-hidden="true" name="check" size={16} className="text-primary" />
               {ability}
             </li>
           ))}
@@ -202,7 +203,7 @@ function ConnectionCard({
           onClick={() => setOpen((value) => !value)}
           className="inline-flex items-center gap-1 font-label-md text-label-md text-on-surface-variant font-semibold hover:text-on-surface"
         >
-          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">{open ? "expand_less" : "expand_more"}</span>
+          <Icon aria-hidden="true" name={open ? "expand_less" : "expand_more"} size={18} />
           Advanced
         </button>
         {open && <AdvancedPanel connection={connection} onChanged={onChanged} />}
@@ -291,7 +292,7 @@ function ConnectFlow({ onClose }: { onClose: () => void }) {
               disabled={busy}
               className="p-1 rounded-lg text-on-surface-variant hover:bg-surface-container-high"
             >
-              <span aria-hidden="true" className="material-symbols-outlined">close</span>
+              <Icon aria-hidden="true" name="close" />
             </button>
           )}
         </div>
@@ -351,7 +352,7 @@ function ConnectFlow({ onClose }: { onClose: () => void }) {
                 data-testid="payout-warning"
                 className="flex gap-2 rounded-lg bg-error-container p-3 font-body-sm text-body-sm text-on-error-container"
               >
-                <span aria-hidden="true" className="material-symbols-outlined text-[20px]">warning</span>
+                <Icon aria-hidden="true" name="warning" size={20} />
                 <span>
                   <strong>Careful: this system will be able to change where employees are paid.</strong> Anyone who gets
                   its secret could send reimbursements to their own account. Every change waits 24 hours before it can be
@@ -447,7 +448,7 @@ function Done({ result }: { result: NewConnectionResult }) {
   return (
     <div className="flex flex-col gap-space-md" data-testid="connect-done">
       <div role="alert" className="flex gap-2 rounded-lg bg-amber-50 p-3 font-body-sm text-body-sm text-amber-900">
-        <span aria-hidden="true" className="material-symbols-outlined text-[20px]">warning</span>
+        <Icon aria-hidden="true" name="warning" size={20} />
         <span>
           <strong>Save the secret now.</strong> It is shown only this once: TenaCare keeps no readable copy. If it is lost, make a
           new one under Advanced.
@@ -464,7 +465,7 @@ function Done({ result }: { result: NewConnectionResult }) {
         rel="noreferrer"
         className="self-start inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold hover:bg-surface-variant transition-colors"
       >
-        <span aria-hidden="true" className="material-symbols-outlined text-[18px]">download</span>
+        <Icon aria-hidden="true" name="download" size={18} />
         Download setup guide
       </a>
     </div>

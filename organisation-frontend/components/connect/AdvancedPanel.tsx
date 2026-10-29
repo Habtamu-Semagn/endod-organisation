@@ -8,6 +8,7 @@ import CopyField from "@/components/connect/CopyField";
 import { apiFetch } from "@/lib/api";
 import type { Connection, Delivery, PayoutChange, RequestLogEntry } from "@/lib/connect";
 import { formatDateTime } from "@/lib/format";
+import { Icon } from "@/components/Icon";
 
 const SECONDARY =
   "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold hover:bg-surface-variant transition-colors disabled:opacity-50";
@@ -104,7 +105,7 @@ export default function AdvancedPanel({ connection, onChanged }: { connection: C
         }
       >
         <button type="button" className={SECONDARY} disabled={busy} onClick={() => setConfirmRotate(true)}>
-          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">autorenew</span>
+          <Icon aria-hidden="true" name="autorenew" size={18} />
           {connection.auth_method === "private_key_jwt" ? "Go back to a client secret" : "Rotate secret"}
         </button>
         <label htmlFor={`jwks-${connection.id}`} className="mt-space-md block font-label-sm text-label-sm text-on-surface-variant">
@@ -160,7 +161,7 @@ export default function AdvancedPanel({ connection, onChanged }: { connection: C
           {connection.webhook_url && (
             <>
               <button type="button" className={SECONDARY} disabled={busy} onClick={sendTest}>
-                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">send</span>
+                <Icon aria-hidden="true" name="send" size={18} />
                 Send test event
               </button>
               <button
