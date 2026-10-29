@@ -39,6 +39,20 @@ export default function OverviewPage() {
         </div>
       </div>
       <ErrorBanner message={error} testId="load-error" />
+      {data?.payout_alerts?.map((alert) => (
+        <p
+          key={alert.connection_id}
+          role="alert"
+          data-testid="payout-alert"
+          className="mb-space-md rounded-xl bg-error-container px-space-md py-space-sm font-body-sm text-body-sm font-medium text-on-error-container"
+        >
+          {alert.changed} payout account{alert.changed === 1 ? "" : "s"} changed by {alert.connection} in the last 24 h
+          {alert.held ? ` (${alert.held} waiting for your confirmation)` : ""}.{" "}
+          <Link href="/connect" className="underline">
+            Review them
+          </Link>
+        </p>
+      ))}
 
       {/* 4 KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-space-lg mb-space-xl">

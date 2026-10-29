@@ -120,6 +120,13 @@ export default function PaymentsPage() {
             employee&apos;s payout account. Add it on the <Link href="/employees" className="underline">Employees</Link> page.
           </p>
         ) : null}
+        {data && data.ready.payout_held && data.ready.payout_held.claims > 0 ? (
+          <p data-testid="payout-held" className="rounded-xl bg-amber-50 px-space-md py-space-sm font-body-sm text-body-sm text-amber-900">
+            {data.ready.payout_held.claims} approved claim(s) ({formatEtb(data.ready.payout_held.total_santim)}) wait: a connected
+            system changed the employee&apos;s payout account less than 24 hours ago. Confirm the change on{" "}
+            <Link href="/connect" className="underline">Connect your system</Link> to pay them now.
+          </p>
+        ) : null}
       </div>
 
       {/* Ready by method */}

@@ -36,7 +36,19 @@ def two_orgs(portal, other_portal):
     batch = b.post("/batches", json={"method": "cbe"}).json()
     pending = b.claim(emp["id"], receipt_number="B-PENDING")
     receipt = b.receipt()
-    ids = {"employee_id": emp["id"], "dependant_id": dependant["id"], "claim_id": claim["id"],
+    b.reauth()
+    connection = b.post("/connections", json={"name": "B system", "scopes": ["employees.read", "webhooks"],
+                                              "webhook_url": "https://hooks.example.com/b"}).json()["connection"]
+    from app.db import platform_session as _platform, utcnow as _now
+    from app.models import IntegrationPayoutChange
+
+    with _platform() as session:
+        change = IntegrationPayoutChange(organisation_id=b.org_id, employee_id=emp["id"], client_pk=connection["id"],
+                                         after_method="cbe", after_account="****1234", hold_until=_now())
+        session.add(change)
+        session.flush()
+        change_id = change.id
+    ids = {"connection_id": connection["id"], "change_id": change_id, "employee_id": emp["id"], "dependant_id": dependant["id"], "claim_id": claim["id"],
            "pending_claim_id": pending["id"], "batch_id": batch["id"], "receipt_id": receipt,
            "claim_receipt_id": claim["receipt_file_id"]}
     a_emp = portal.employee(name="Own Employee")
@@ -60,7 +72,10 @@ def _routes_with_ids():
 
 #: Every route that takes an id, and the B id to try for each parameter.
 PARAMS = {"employee_id": "employee_id", "dependant_id": "dependant_id", "claim_id": "claim_id",
-          "batch_id": "batch_id", "receipt_id": "receipt_id"}
+          "batch_id": "batch_id", "receipt_id": "receipt_id", "connection_id": "connection_id",
+          "change_id": "change_id"}
+_JWK = {"kty": "EC", "crv": "P-256", "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}
 BODIES = {
     ("PATCH", "/employees/{employee_id}"): {"name": "Hijacked"},
     ("POST", "/employees/{employee_id}/dependants"): {"name": "Intruder", "relationship": "child"},
@@ -68,6 +83,9 @@ BODIES = {
                                                "dependants_covered": True, "excluded_medicines": []},
     ("POST", "/claims/{claim_id}/reject"): {"reason": "Not yours."},
     ("POST", "/batches/{batch_id}/mark-paid"): {"reference": "STOLEN-1"},
+    ("POST", "/connections/{connection_id}/ip-restriction"): {"allowed_ips": ["196.188.10.0/24"]},
+    ("POST", "/connections/{connection_id}/public-key"): {"jwks": {"keys": [_JWK]}},
+    ("POST", "/connections/{connection_id}/webhook"): {"url": "https://hooks.example.com/a"},
 }
 
 
@@ -112,7 +130,13 @@ def test_nothing_of_b_was_changed(two_orgs):
     a.post(f"/batches/{ids['batch_id']}/mark-paid", json={"reference": "STOLEN-1"})
     a.post(f"/batches/{ids['batch_id']}/cancel")
     a.post(f"/employees/{ids['employee_id']}/deactivate")
+    a.post(f"/connections/{ids['connection_id']}/disconnect")
+    a.post(f"/connections/{ids['connection_id']}/rotate-secret")
     with platform_session() as session:
+        from app.models import IntegrationClient
+
+        b_connection = session.get(IntegrationClient, ids["connection_id"])
+        assert b_connection.revoked_at is None and b_connection.credentials_changed_at is None
         assert session.get(Employee, ids["employee_id"]).name == "Secret Bekele"
         assert session.get(Employee, ids["employee_id"]).active is True
         assert session.get(Claim, ids["pending_claim_id"]).status == "pending"

@@ -84,6 +84,30 @@ class Settings(BaseSettings):
     #: than 32 characters): every /platform route answers 503.
     ORG_PLATFORM_KEY: Optional[str] = None
 
+    # --- The integration API for companies' own systems (docs/integrations.md) ---
+    #: A file holding the PEM EC P-256 private key that signs integration access
+    #: tokens (``openssl ecparam -name prime256v1 -genkey -noout -out
+    #: signing.pem``), mounted read-only into the API and the worker. Without it,
+    #: outside an environment set explicitly to development or test, the
+    #: integration API issues no tokens (503).
+    INTEGRATIONS_SIGNING_KEY_FILE: Optional[str] = None
+    #: Where nginx publishes the integration API (location /organisation/v1/ ->
+    #: api:8000/integrations/v1/). Tokens name it as issuer and audience; client
+    #: assertions name ``<this>/oauth/token`` as their audience.
+    INTEGRATIONS_PUBLIC_URL: str = "https://api.endod-health.com/organisation/v1"
+    #: Shared with our nginx, which sends it as X-Endod-Edge-Key (with
+    #: X-Endod-Client-IP) on every request to the integration API: without it a
+    #: caller could choose its own address (IP restrictions, the request log).
+    #: In production a missing or short one makes the integration API answer 503.
+    EDGE_SHARED_SECRET: Optional[str] = None
+    #: How often the worker looks for webhook deliveries that are due (seconds).
+    ORG_WORKER_INTERVAL_SECONDS: int = 5
+
+    @field_validator("INTEGRATIONS_PUBLIC_URL", mode="before")
+    @classmethod
+    def _public_url(cls, value):
+        return value.strip().rstrip("/") if isinstance(value, str) else value
+
     @field_validator("ORG_ENVIRONMENT", mode="before")
     @classmethod
     def _lower(cls, value):
@@ -114,6 +138,11 @@ class Settings(BaseSettings):
             raise RuntimeError("BFF_SHARED_SECRET must be set to at least 32 random characters.")
         return DEV_BFF_SECRET
 
+
+    def edge_secret(self) -> Optional[str]:
+        """nginx's key for the integration API, or None (development only, see EDGE_SHARED_SECRET)."""
+        secret = self.EDGE_SHARED_SECRET or ""
+        return secret if len(secret) >= 32 else None
 
     def platform_key(self) -> Optional[str]:
         """The platform API's key, or None when the API is switched off."""

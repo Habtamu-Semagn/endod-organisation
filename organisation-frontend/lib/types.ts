@@ -152,6 +152,8 @@ export type Payments = {
     claims: Claim[];
     by_method: Record<PayoutMethod, { claims: number; total_santim: number }>;
     missing_payout_details: { claims: number; total_santim: number };
+    /** Claims of employees whose payout account a connected system changed less than 24 hours ago. */
+    payout_held?: { claims: number; total_santim: number };
     total_santim: number;
   };
   enabled_methods: PayoutMethod[];
@@ -170,6 +172,8 @@ export type Overview = {
   pending_total_santim: number;
   employees: { active: number; linked_endod: number; claimants: number };
   policy: { annual_limit_santim: number; copay_percent: number; dependants_covered: boolean };
+  /** Payout accounts changed by connected systems in the last 24 hours (backend app/payout_holds.py). */
+  payout_alerts?: { connection_id: string; connection: string; changed: number; held: number }[];
 };
 
 export type Report = {

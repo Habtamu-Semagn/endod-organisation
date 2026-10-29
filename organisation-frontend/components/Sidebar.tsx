@@ -17,6 +17,7 @@ const navItems: { path: string; label: string; icon: IconName; href: string }[] 
   { path: "employees", label: "Employees", icon: "group", href: "/employees" },
   { path: "reports", label: "Reports", icon: "bar_chart", href: "/reports" },
   { path: "settings", label: "Policy & Settings", icon: "tune", href: "/settings" },
+  { path: "connect", label: "Connect your system", icon: "hub", href: "/connect" },
 ];
 
 function activePathFrom(pathname: string) {

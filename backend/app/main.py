@@ -8,7 +8,10 @@ organisation (app.tenancy).
 
 The one exception is ``/platform/*`` (app.api.platform): Endod's super admin
 calls it over the endod-bus network with X-Platform-Key instead of the BFF's
-secret; the BFF never passes those paths on.
+secret; the BFF never passes those paths on. And ``/integrations/v1``
+(app.api.integrations): the integration API for companies' own systems, its
+own application, reached through nginx (X-Endod-Edge-Key) with OAuth 2.0
+access tokens; it neither needs nor accepts the BFF secret in their place.
 """
 
 from __future__ import annotations
@@ -24,12 +27,14 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.api import (
-    application, auth, batches, claims, employees, overview, platform, receipts, reports, settings as settings_api,
+    application, auth, batches, claims, connections, employees, integrations, overview, platform, receipts, reports,
+    settings as settings_api,
 )
 from app import onboarding
 from app.config import Settings, get_settings
 from app.db import check_connection_role
 from app.errors import ApiError
+from app.integrations import signing
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger("organisation")
@@ -45,6 +50,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         # Row-level security must hold the API's own database role (app.db).
         await run_in_threadpool(check_connection_role)
+        # The integration API answers 503 without its signing key (outside development and test).
+        signing.check_at_start()
         sweeper = asyncio.create_task(_sweep_forever()) if settings.ORG_SWEEP_INTERVAL_SECONDS > 0 else None
         try:
             yield
@@ -67,6 +74,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         the networks are refused, and only the BFF names the client. The
         platform API needs the platform key instead (and its router checks it
         again)."""
+        if _is_integrations(request):
+            # Its own application checks nginx's key and the access token (app.api.integrations).
+            return await call_next(request)
         if _is_platform(request):
             refused = platform.check_platform_key(request.headers.get("x-platform-key"))
             if refused is not None:
@@ -119,6 +129,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(reports.router)
     app.include_router(application.router)
     app.include_router(platform.router)
+    app.include_router(connections.router)
+    # The integration API for companies' own systems: its own app, OpenAPI and errors.
+    app.mount(integrations.PREFIX, integrations.create_app())
     return app
 
 
@@ -130,6 +143,11 @@ async def _sweep_forever() -> None:
             await run_in_threadpool(onboarding.sweep_now)
         except Exception:  # noqa: BLE001  (logged; the next round tries again)
             logger.exception("draft_sweep_failed")
+
+
+def _is_integrations(request: Request) -> bool:
+    path = request.url.path
+    return path == integrations.PREFIX or path.startswith(integrations.PREFIX + "/")
 
 
 def _is_platform(request: Request) -> bool:

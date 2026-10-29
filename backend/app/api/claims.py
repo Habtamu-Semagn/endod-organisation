@@ -22,6 +22,7 @@ from app.auth import Principal, current_admin, fresh_admin
 from app.claims_intake import MAX_ITEMS, MAX_QUANTITY, NewClaim, NewItem, create_claim
 from app.db import tenant_session, utcnow
 from app.errors import ApiError
+from app.integrations import webhooks
 from app.models import AuditResult, Claim, ClaimItem, ClaimStatus, Dependant, Employee, PaymentBatch
 from app.policy import assess, claim_code
 from app.tenancy import owned
@@ -199,6 +200,7 @@ def approve(claim_id: str, principal: Principal = Depends(fresh_admin)) -> Dict[
                              target_name=claim_code(claim.number),
                              detail={"total_santim": claim.total_santim, "copay_santim": result.copay_santim,
                                      "approved_santim": result.payable_santim, "capped": result.capped})
+                    webhooks.claim_event(session, claim, webhooks.CLAIM_APPROVED)
                     data = _load(session, claim)
                     data["notes"] = list(result.notes)
                     return data
@@ -224,5 +226,6 @@ def reject(claim_id: str, body: RejectIn, principal: Principal = Depends(fresh_a
             claim.reviewed_at = utcnow()
             audit.by(session, principal, audit.CLAIM_REJECTED, target_type="claim", target_id=claim.id,
                      target_name=claim_code(claim.number), detail={"reason": reason})
+            webhooks.claim_event(session, claim, webhooks.CLAIM_REJECTED)
             return _load(session, claim)
     raise failure
