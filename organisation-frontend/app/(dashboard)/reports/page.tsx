@@ -4,6 +4,7 @@ import { useState } from "react";
 import { EmptyRow, ErrorBanner, useApi } from "@/components/ui";
 import { formatDate, formatEtb, formatMonth, percentOf } from "@/lib/format";
 import type { Report } from "@/lib/types";
+import { Icon } from "@/components/Icon";
 
 const SHADES = ["bg-primary", "bg-on-surface-variant", "bg-primary-container", "bg-outline", "bg-secondary", "bg-surface-dim"];
 
@@ -42,7 +43,7 @@ export default function ReportsPage() {
         </div>
         <div className="flex flex-wrap items-center gap-space-md self-start lg:self-auto shrink-0">
           <label className="h-10 px-3 bg-surface-container-lowest rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface">
-            <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-primary">calendar_month</span>
+            <Icon aria-hidden="true" name="calendar_month" className="text-primary" size={18} />
             <input aria-label="Report from" type="date" value={from || data?.period.from || ""} onChange={(e) => setFrom(e.target.value)} className="bg-transparent focus:outline-none" />
             <span className="text-outline">–</span>
             <input aria-label="Report to" type="date" value={to || data?.period.to || ""} onChange={(e) => setTo(e.target.value)} className="bg-transparent focus:outline-none" />
@@ -51,7 +52,7 @@ export default function ReportsPage() {
             href={exportQuery("month")}
             className="inline-flex items-center gap-2 h-10 px-5 rounded-lg bg-primary text-on-primary hover:bg-primary-container transition-all font-label-lg text-label-lg"
           >
-            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">table_view</span>
+            <Icon aria-hidden="true" name="table_view" size={18} />
             <span>Download CSV (by month)</span>
           </a>
         </div>
@@ -71,7 +72,7 @@ export default function ReportsPage() {
         <div className="p-space-xl rounded-xl bg-surface-container-lowest flex flex-col">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-space-sm">
-              <span aria-hidden="true" className="material-symbols-outlined text-primary text-[20px]">domain</span>
+              <Icon aria-hidden="true" name="domain" className="text-primary" size={20} />
               <h2 className="font-headline-sm text-headline-sm text-on-surface">Medication Spend by Department</h2>
             </div>
             <a href={exportQuery("department")} className="font-label-sm text-label-sm text-primary hover:underline">CSV</a>
@@ -107,7 +108,7 @@ export default function ReportsPage() {
         <div className="p-space-xl rounded-xl bg-surface-container-lowest flex flex-col">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-space-sm">
-              <span aria-hidden="true" className="material-symbols-outlined text-primary text-[20px]">calendar_month</span>
+              <Icon aria-hidden="true" name="calendar_month" className="text-primary" size={20} />
               <h2 className="font-headline-sm text-headline-sm text-on-surface">Medication Spend by Month</h2>
             </div>
             <a href={exportQuery("month")} className="font-label-sm text-label-sm text-primary hover:underline">CSV</a>

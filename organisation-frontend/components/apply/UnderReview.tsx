@@ -8,8 +8,9 @@ import type { Me } from "@/lib/types";
 import ApplyFrame from "@/components/apply/ApplyFrame";
 import { signOut } from "@/components/apply/ApplyWizard";
 import { FormError, linkButton, primaryButton } from "@/components/auth/AuthCard";
+import { Icon, type IconName } from "@/components/Icon";
 
-const NEXT_STEPS = [
+const NEXT_STEPS: { icon: IconName; text: string }[] = [
   { icon: "fact_check", text: "Endod checks your company details and documents." },
   {
     icon: "verified",
@@ -126,9 +127,7 @@ export default function UnderReview() {
           <ol className="space-y-2">
             {NEXT_STEPS.map((item) => (
               <li key={item.icon} className="flex items-start gap-3 font-body-sm text-body-sm text-on-surface-variant">
-                <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-primary">
-                  {item.icon}
-                </span>
+                <Icon aria-hidden="true" name={item.icon} className="text-primary" size={18} />
                 <span>{item.text}</span>
               </li>
             ))}

@@ -8,6 +8,7 @@ import { ErrorBanner, NoticeBanner, StatusBadge, SuccessBanner, messageOf, useAp
 import { apiFetch } from '@/lib/api';
 import { formatDate, formatDateTime, formatEtb, initials, PAYOUT_LABELS } from '@/lib/format';
 import type { Claim } from '@/lib/types';
+import { Icon } from "@/components/Icon";
 
 export default function ClaimDetailClient({ id }: { id: string }) {
   const { runSensitive, refreshCounts } = usePortal();
@@ -68,7 +69,7 @@ export default function ClaimDetailClient({ id }: { id: string }) {
         href='/claims'
         className='inline-flex items-center gap-1 font-label-md text-label-md text-on-surface-variant hover:text-primary transition-colors w-max'
       >
-        <span aria-hidden="true" className='material-symbols-outlined text-[18px]'>arrow_back</span>
+        <Icon aria-hidden="true" name="arrow_back" size={18} />
         Back to claims
       </Link>
 
@@ -205,7 +206,7 @@ export default function ClaimDetailClient({ id }: { id: string }) {
         <h2 className='font-label-md text-label-md uppercase tracking-wider text-on-surface-variant font-semibold'>Attachments ({claim.has_receipt ? 1 : 0})</h2>
         {claim.receipt_file_id ? (
           <div className='flex items-center gap-2 p-2 rounded-lg bg-surface-container-low'>
-            <span aria-hidden="true" className='material-symbols-outlined text-primary text-[20px]'>description</span>
+            <Icon aria-hidden="true" name="description" className="text-primary" size={20} />
             <div className='flex flex-col min-w-0 flex-1'>
               <span className='font-label-md text-label-md font-semibold text-on-surface truncate'>Pharmacy receipt</span>
               <span className='font-body-sm text-body-sm text-on-surface-variant truncate'>Entered with the claim</span>
@@ -239,7 +240,7 @@ export default function ClaimDetailClient({ id }: { id: string }) {
             }}
             className='h-11 px-4 rounded-lg bg-surface-container-lowest hover:bg-error-container text-error font-label-lg text-label-lg font-semibold flex items-center justify-center gap-2 transition-colors border border-surface-container'
           >
-            <span aria-hidden="true" className='material-symbols-outlined text-[18px]'>close</span>
+            <Icon aria-hidden="true" name="close" size={18} />
             <span>Reject Claim</span>
           </button>
           <button
@@ -248,7 +249,7 @@ export default function ClaimDetailClient({ id }: { id: string }) {
             disabled={busy}
             className='h-11 px-4 rounded-lg bg-primary hover:bg-secondary text-on-primary font-label-lg text-label-lg font-bold flex items-center justify-center gap-2 transition-colors disabled:opacity-50'
           >
-            <span aria-hidden="true" className='material-symbols-outlined text-[18px]'>check</span>
+            <Icon aria-hidden="true" name="check" size={18} />
             <span>{busy ? 'Working…' : `Approve (${formatEtb(assessment?.payable_santim ?? 0)})`}</span>
           </button>
         </div>

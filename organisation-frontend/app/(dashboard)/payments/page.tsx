@@ -8,6 +8,7 @@ import { EmptyRow, ErrorBanner, StatusBadge, SuccessBanner, messageOf, useApi } 
 import { apiFetch } from "@/lib/api";
 import { formatDate, formatDateTime, formatEtb, PAYOUT_LABELS } from "@/lib/format";
 import type { Batch, Payments, PayoutMethod } from "@/lib/types";
+import { Icon } from "@/components/Icon";
 
 type Tab = "ready" | "open" | "completed";
 
@@ -139,7 +140,7 @@ export default function PaymentsPage() {
                 onClick={() => setCreating(method)}
                 className="mt-auto inline-flex items-center justify-center gap-space-sm px-4 py-2 rounded-lg bg-primary text-on-primary hover:bg-primary-container transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">send_money</span>
+                <Icon aria-hidden="true" name="send_money" size={18} />
                 <span className="font-label-md text-label-md font-semibold">Create batch</span>
               </button>
             </div>
@@ -261,7 +262,7 @@ export default function PaymentsPage() {
                           onClick={() => setTimeout(reload, 1500)}
                           className="inline-flex items-center gap-1 px-3 py-1 rounded text-on-surface-variant hover:text-primary font-label-sm text-label-sm transition-colors"
                         >
-                          <span aria-hidden="true" className="material-symbols-outlined text-[16px]">sim_card_download</span>
+                          <Icon aria-hidden="true" name="sim_card_download" size={16} />
                           <span>Download file</span>
                         </a>
                         {batch.status === "open" && (

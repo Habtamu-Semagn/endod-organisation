@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Icon, type IconName } from "@/components/Icon";
 
 type SidebarProps = {
   open: boolean;
@@ -9,7 +10,7 @@ type SidebarProps = {
   pendingCount: number | null;
 };
 
-const navItems = [
+const navItems: { path: string; label: string; icon: IconName; href: string }[] = [
   { path: "overview", label: "Overview", icon: "dashboard", href: "/" },
   { path: "claims", label: "Claims", icon: "fact_check", href: "/claims" },
   { path: "payments", label: "Payments", icon: "credit_card", href: "/payments" },
@@ -69,7 +70,7 @@ export default function Sidebar({ open, onClose, pendingCount }: SidebarProps) {
                     onClick={onClose}
                   >
                     <div className="flex items-center gap-space-md">
-                      <span aria-hidden="true" className="material-symbols-outlined text-[20px]">{item.icon}</span>
+                      <Icon aria-hidden="true" name={item.icon} size={20} />
                       <span className="font-label-lg text-label-lg">{item.label}</span>
                     </div>
                     {badge ? (

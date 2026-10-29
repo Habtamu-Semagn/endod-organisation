@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { initials } from "@/lib/format";
 import type { Me } from "@/lib/types";
+import { Icon } from "@/components/Icon";
 
 type HeaderProps = {
   onMenuClick?: () => void;
@@ -23,7 +24,7 @@ export default function Header({ onMenuClick, me, onSignOut }: HeaderProps) {
         onClick={onMenuClick}
         type="button"
       >
-        <span aria-hidden="true" className="material-symbols-outlined text-[22px]">menu</span>
+        <Icon aria-hidden="true" name="menu" size={22} />
       </button>
       <form
         className="flex-1 max-w-xl"
@@ -35,7 +36,7 @@ export default function Header({ onMenuClick, me, onSignOut }: HeaderProps) {
         }}
       >
         <div className="relative flex items-center">
-          <span aria-hidden="true" className="material-symbols-outlined absolute left-3 text-outline text-[20px]">search</span>
+          <Icon aria-hidden="true" name="search" className="absolute left-3 text-outline" size={20} />
           <input
             aria-label="Search claims"
             className="w-full h-10 pl-10 pr-4 bg-surface-container-lowest rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-2 focus:ring-primary "
@@ -65,7 +66,7 @@ export default function Header({ onMenuClick, me, onSignOut }: HeaderProps) {
             onClick={onSignOut}
             className="ml-space-sm inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container-high text-on-surface-variant font-label-md text-label-md"
           >
-            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">logout</span>
+            <Icon aria-hidden="true" name="logout" size={18} />
             <span>Sign out</span>
           </button>
         </div>
