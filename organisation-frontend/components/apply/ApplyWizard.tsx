@@ -7,6 +7,7 @@ import { SECTORS, STEPS, TWO_STEP_LATER, sectorLabel, type Application, type Com
 import type { Me } from "@/lib/types";
 import ApplyFrame from "@/components/apply/ApplyFrame";
 import { FormError, inputClass, labelClass, linkButton, primaryButton } from "@/components/auth/AuthCard";
+import { Icon } from "@/components/Icon";
 
 const secondaryButton =
   "h-10 px-4 rounded-lg bg-surface-container-high text-on-surface font-label-lg text-label-lg font-semibold hover:bg-surface-container-highest transition-colors disabled:opacity-50";
@@ -442,7 +443,7 @@ function DocumentsStep({
             {busyKind === doc.kind && <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">Uploading…</p>}
             {doc.uploaded && (
               <p data-testid={`document-${doc.kind}`} className="mt-1 font-body-sm text-body-sm text-on-surface">
-                <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-tertiary align-middle">check_circle</span>{" "}
+                <Icon aria-hidden="true" name="check_circle" className="text-tertiary align-middle" size={16} />{" "}
                 {doc.filename} uploaded ·{" "}
                 <a href={`/api/application/documents/${doc.kind}`} target="_blank" rel="noopener noreferrer" className={linkButton}>
                   View

@@ -8,6 +8,7 @@ import { EmptyRow, ErrorBanner, StatusBadge, SuccessBanner, messageOf, useApi } 
 import { apiFetch } from "@/lib/api";
 import { formatDate, formatEtb, initials, parseEtb, PAYOUT_LABELS, santimToInput } from "@/lib/format";
 import type { Employee, EmployeeDetail, EmployeeList, ImportPlan } from "@/lib/types";
+import { Icon, type IconName } from "@/components/Icon";
 
 const PAGE_SIZE = 20;
 
@@ -73,7 +74,7 @@ export default function EmployeesPage() {
             href="/api/export/employees/export"
             className="inline-flex items-center gap-space-sm px-4 py-2.5 rounded-lg bg-surface-container-lowest text-on-surface font-label-lg text-label-lg hover:bg-surface-container-low transition-all"
           >
-            <span aria-hidden="true" className="material-symbols-outlined text-[19px] text-on-surface-variant">download</span>
+            <Icon aria-hidden="true" name="download" className="text-on-surface-variant" size={19} />
             <span>Export CSV</span>
           </a>
           <button
@@ -81,7 +82,7 @@ export default function EmployeesPage() {
             type="button"
             onClick={() => setImportOpen(true)}
           >
-            <span aria-hidden="true" className="material-symbols-outlined text-[19px] text-on-surface-variant">upload_file</span>
+            <Icon aria-hidden="true" name="upload_file" className="text-on-surface-variant" size={19} />
             <span>Import Employees (CSV)</span>
           </button>
           <button
@@ -89,7 +90,7 @@ export default function EmployeesPage() {
             onClick={() => setFormOpen({ employee: null })}
             type="button"
           >
-            <span aria-hidden="true" className="material-symbols-outlined text-[20px]">person_add</span>
+            <Icon aria-hidden="true" name="person_add" size={20} />
             <span>Add Single Employee</span>
           </button>
         </div>
@@ -117,7 +118,7 @@ export default function EmployeesPage() {
               setPage(1);
             }}
           >
-            <span aria-hidden="true" className="material-symbols-outlined absolute left-3.5 top-2.5 text-outline text-[20px]">search</span>
+            <Icon aria-hidden="true" name="search" className="absolute left-3.5 top-2.5 text-outline" size={20} />
             <input
               aria-label="Search employees"
               className="w-full h-10 pl-11 pr-4 bg-surface rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary"
@@ -169,7 +170,7 @@ export default function EmployeesPage() {
               title="Reset Filters"
               type="button"
             >
-              <span aria-hidden="true" className="material-symbols-outlined text-[18px]">filter_list_off</span>
+              <Icon aria-hidden="true" name="filter_list_off" size={18} />
               <span className="font-label-sm text-label-sm">Reset</span>
             </button>
           </div>
@@ -231,7 +232,7 @@ export default function EmployeesPage() {
                     </td>
                     <td className="py-3.5 px-4">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container font-label-sm text-label-sm text-on-surface">
-                        <span aria-hidden="true" className="material-symbols-outlined text-[15px] text-primary">{emp.dependants.length ? "diversity_1" : "person"}</span>
+                        <Icon aria-hidden="true" name={emp.dependants.length ? "diversity_1" : "person"} className="text-primary" size={15} />
                         <span>{emp.dependants.length ? `${emp.dependants.length} dependant${emp.dependants.length > 1 ? "s" : ""}` : "Self Only"}</span>
                       </span>
                     </td>
@@ -420,7 +421,7 @@ function EmployeeDrawer({
                 </div>
               </div>
               <button aria-label="Close detail pane" className="p-2 rounded-full hover:bg-surface-container-high text-on-surface-variant transition-colors" onClick={onClose} type="button">
-                <span aria-hidden="true" className="material-symbols-outlined text-[22px]">close</span>
+                <Icon aria-hidden="true" name="close" size={22} />
               </button>
             </div>
             <div className="p-space-lg flex-1 flex flex-col gap-space-lg">
@@ -428,7 +429,7 @@ function EmployeeDrawer({
               <div className="p-space-md rounded-xl bg-primary/5 flex items-center justify-between gap-space-md">
                 <div className="flex items-center gap-space-md">
                   <span className="p-2.5 rounded-xl bg-primary text-on-primary">
-                    <span aria-hidden="true" className="material-symbols-outlined text-[22px]">shield_with_heart</span>
+                    <Icon aria-hidden="true" name="shield_with_heart" size={22} />
                   </span>
                   <div className="flex flex-col">
                     <span className="font-label-lg text-label-lg font-bold text-on-surface">
@@ -517,7 +518,7 @@ function EmployeeDrawer({
                       <div key={d.id} data-testid="dependant" className="p-space-md rounded-xl bg-surface flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <span className="p-2 rounded-lg bg-surface-container text-primary">
-                            <span aria-hidden="true" className="material-symbols-outlined text-[20px]">{d.relationship === "child" ? "child_care" : "person"}</span>
+                            <Icon aria-hidden="true" name={d.relationship === "child" ? "child_care" : "person"} size={20} />
                           </span>
                           <div className="flex flex-col">
                             <span className="font-label-lg text-label-lg font-bold text-on-surface">{d.name}</span>
@@ -533,7 +534,7 @@ function EmployeeDrawer({
                           className="p-1 rounded-lg text-on-surface-variant hover:bg-surface-container-high"
                           onClick={() => void run(() => apiFetch<EmployeeDetail>(`employees/${emp.id}/dependants/${d.id}/remove`, { method: "POST" }))}
                         >
-                          <span aria-hidden="true" className="material-symbols-outlined text-[18px]">person_remove</span>
+                          <Icon aria-hidden="true" name="person_remove" size={18} />
                         </button>
                       </div>
                     ))}
@@ -562,7 +563,7 @@ function EmployeeDrawer({
                   <span className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant font-semibold">Prescription Claim Ledger</span>
                   <Link className="font-label-sm text-label-sm text-primary hover:underline font-semibold flex items-center gap-0.5" href={`/claims?q=${encodeURIComponent(emp.employee_number)}`}>
                     All claims
-                    <span aria-hidden="true" className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                    <Icon aria-hidden="true" name="arrow_forward" size={14} />
                   </Link>
                 </div>
                 <div className="flex flex-col gap-2">
@@ -571,7 +572,7 @@ function EmployeeDrawer({
                     <Link key={c.id} href={`/claims/${c.id}`} className="p-space-md rounded-xl bg-surface flex items-center justify-between hover:bg-surface-container-high transition-colors">
                       <div className="flex items-center gap-3">
                         <span className="p-2 rounded-lg bg-surface-container-high text-primary">
-                          <span aria-hidden="true" className="material-symbols-outlined text-[19px]">receipt_long</span>
+                          <Icon aria-hidden="true" name="receipt_long" size={19} />
                         </span>
                         <div className="flex flex-col">
                           <span className="font-label-lg text-label-lg font-semibold text-on-surface">{c.pharmacy_name}</span>
@@ -595,7 +596,7 @@ function EmployeeDrawer({
                 type="button"
                 onClick={() => onEdit(emp)}
               >
-                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">edit</span>
+                <Icon aria-hidden="true" name="edit" size={18} />
                 <span>Edit Employee</span>
               </button>
               <button
@@ -604,7 +605,7 @@ function EmployeeDrawer({
                 disabled={busy}
                 onClick={() => void run(() => apiFetch<EmployeeDetail>(`employees/${emp.id}/${emp.active ? "deactivate" : "activate"}`, { method: "POST" }))}
               >
-                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">{emp.active ? "person_off" : "person_check"}</span>
+                <Icon aria-hidden="true" name={emp.active ? "person_off" : "person_check"} size={18} />
                 <span>{emp.active ? "Deactivate" : "Reactivate"}</span>
               </button>
               <button
@@ -612,7 +613,7 @@ function EmployeeDrawer({
                 type="button"
                 onClick={() => setPolicyOpen(true)}
               >
-                <span aria-hidden="true" className="material-symbols-outlined text-[18px]">edit_note</span>
+                <Icon aria-hidden="true" name="edit_note" size={18} />
                 <span>Edit Beneficiary Policy</span>
               </button>
             </div>
@@ -641,10 +642,10 @@ function EmployeeDrawer({
   );
 }
 
-function Info({ icon, text }: { icon: string; text: string }) {
+function Info({ icon, text }: { icon: IconName; text: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span aria-hidden="true" className="material-symbols-outlined text-outline text-[18px]">{icon}</span>
+      <Icon aria-hidden="true" name={icon} className="text-outline" size={18} />
       <span className="font-body-sm text-body-sm text-on-surface font-mono select-all">{text}</span>
     </div>
   );

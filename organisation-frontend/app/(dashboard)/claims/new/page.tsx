@@ -9,6 +9,7 @@ import { ErrorBanner, messageOf } from "@/components/ui";
 import { apiFetch, RECEIPT_TYPES, uploadReceipt, type UploadedReceipt } from "@/lib/api";
 import { formatEtb, parseEtb, todayIso } from "@/lib/format";
 import type { Claim, Employee, EmployeeDetail, EmployeeList } from "@/lib/types";
+import { Icon } from "@/components/Icon";
 
 type Line = { key: number; medicine: string; quantity: string; price: string };
 
@@ -120,7 +121,7 @@ export default function NewClaimPage() {
   return (
     <div className="w-full max-w-5xl flex flex-col gap-space-md pb-space-2xl pt-space-lg">
       <Link href="/claims" className="inline-flex items-center gap-1 font-label-md text-label-md text-on-surface-variant hover:text-primary transition-colors w-max">
-        <span aria-hidden="true" className="material-symbols-outlined text-[18px]">arrow_back</span>
+        <Icon aria-hidden="true" name="arrow_back" size={18} />
         Back to claims
       </Link>
       <header className="flex flex-col gap-1">
@@ -235,7 +236,7 @@ export default function NewClaimPage() {
                     className="p-1 rounded-lg text-on-surface-variant hover:bg-surface-container-high"
                     onClick={() => setLines((all) => all.filter((l) => l.key !== line.key))}
                   >
-                    <span aria-hidden="true" className="material-symbols-outlined text-[18px]">close</span>
+                    <Icon aria-hidden="true" name="close" size={18} />
                   </button>
                 )}
               </div>
@@ -269,7 +270,7 @@ export default function NewClaimPage() {
           {uploading && <span className="font-body-sm text-body-sm text-on-surface-variant">Uploading…</span>}
           {receipt && (
             <span data-testid="receipt-uploaded" className="font-body-sm text-body-sm text-on-surface">
-              <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-tertiary align-middle">check_circle</span> {receipt.filename} attached
+              <Icon aria-hidden="true" name="check_circle" className="text-tertiary align-middle" size={16} /> {receipt.filename} attached
             </span>
           )}
         </section>
@@ -281,7 +282,7 @@ export default function NewClaimPage() {
             disabled={busy || uploading || !employee || !receipt || !complete}
             className="h-11 px-6 rounded-lg bg-primary hover:bg-secondary text-on-primary font-label-lg text-label-lg font-bold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <span aria-hidden="true" className="material-symbols-outlined text-[18px]">save</span>
+            <Icon aria-hidden="true" name="save" size={18} />
             {busy ? "Saving…" : "Save claim"}
           </button>
         </div>

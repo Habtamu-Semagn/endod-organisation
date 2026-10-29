@@ -6,6 +6,7 @@ import { Suspense, useState } from "react";
 import { EmptyRow, ErrorBanner, StatusBadge, useApi } from "@/components/ui";
 import { formatDate, formatEtb } from "@/lib/format";
 import type { ClaimList } from "@/lib/types";
+import { Icon, type IconName } from "@/components/Icon";
 
 const TABS = [
   { key: "all", label: "All" },
@@ -78,7 +79,7 @@ function ClaimsContent() {
           <div className="flex items-center gap-space-sm">
             <div className="flex items-center gap-space-sm bg-surface-container-low p-1.5 rounded-xl">
               <div className="px-space-md py-1 bg-surface-container-lowest rounded-lg flex items-center gap-2">
-                <span aria-hidden="true" className="material-symbols-outlined text-secondary text-[18px]">account_balance_wallet</span>
+                <Icon aria-hidden="true" name="account_balance_wallet" className="text-secondary" size={18} />
                 <div className="flex flex-col">
                   <span className="font-label-sm text-label-sm text-on-surface-variant uppercase">Pending Total</span>
                   <span data-testid="pending-total" className="font-numeric-currency text-numeric-currency text-on-surface font-bold">
@@ -91,7 +92,7 @@ function ClaimsContent() {
               href="/claims/new"
               className="inline-flex items-center gap-space-sm px-4 py-2.5 rounded-lg bg-primary text-on-primary font-label-lg text-label-lg hover:bg-secondary transition-all"
             >
-              <span aria-hidden="true" className="material-symbols-outlined text-[20px]">add</span>
+              <Icon aria-hidden="true" name="add" size={20} />
               <span>New Claim</span>
             </Link>
           </div>
@@ -135,7 +136,7 @@ function ClaimsContent() {
         <SearchBox key={q} initial={q} onSearch={(value) => update({ q: value || null })} />
         <div className="flex flex-wrap items-center gap-space-sm">
           <label className="h-10 px-3 bg-surface-container-low rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface">
-            <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-primary">calendar_month</span>
+            <Icon aria-hidden="true" name="calendar_month" className="text-primary" size={18} />
             <input aria-label="Receipts from" type="date" value={from} onChange={(e) => update({ from: e.target.value || null })} className="bg-transparent focus:outline-none" />
             <span className="text-outline">–</span>
             <input aria-label="Receipts to" type="date" value={to} onChange={(e) => update({ to: e.target.value || null })} className="bg-transparent focus:outline-none" />
@@ -215,7 +216,7 @@ function ClaimsContent() {
                       <td className="py-space-md px-space-md">
                         <div className="flex flex-col max-w-[260px]">
                           <span className="font-label-md text-label-md text-on-surface font-medium truncate flex items-center gap-1">
-                            <span aria-hidden="true" className="material-symbols-outlined text-outline text-[14px]">storefront</span>
+                            <Icon aria-hidden="true" name="storefront" className="text-outline" size={14} />
                             {claim.pharmacy_name}
                           </span>
                           <span className="font-body-sm text-body-sm text-on-surface-variant truncate">{(claim.medicines ?? []).join(" + ")}</span>
@@ -289,7 +290,7 @@ function Menu({
   setOpen,
 }: {
   id: string;
-  icon: string;
+  icon: IconName;
   label: string;
   options: string[];
   render: (value: string) => string;
@@ -305,9 +306,9 @@ function Menu({
         onClick={() => setOpen(open === id ? null : id)}
         className="h-10 px-3 bg-surface-container-low hover:bg-surface-container rounded-lg flex items-center gap-2 font-label-md text-label-md text-on-surface transition-colors"
       >
-        <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-outline">{icon}</span>
+        <Icon aria-hidden="true" name={icon} className="text-outline" size={18} />
         <span>{label}</span>
-        <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-outline">expand_more</span>
+        <Icon aria-hidden="true" name="expand_more" className="text-outline" size={16} />
       </button>
       {open === id && (
         <div className="absolute z-20 mt-1 w-56 max-h-72 overflow-y-auto bg-surface-container-lowest rounded-lg shadow-lg border border-surface-container-high py-1">
@@ -340,7 +341,7 @@ function SearchBox({ initial, onSearch }: { initial: string; onSearch: (value: s
         onSearch(search.trim());
       }}
     >
-      <span aria-hidden="true" className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
+      <Icon aria-hidden="true" name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-outline" size={18} />
       <input
         aria-label="Search claims list"
         className="w-full h-10 pl-9 pr-4 bg-surface-container-low rounded-lg font-body-md text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:bg-surface-container-lowest focus:ring-2 focus:ring-primary"
